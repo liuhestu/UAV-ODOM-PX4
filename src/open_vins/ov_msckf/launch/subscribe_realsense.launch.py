@@ -39,6 +39,9 @@ def generate_launch_description():
             "enable_infra1": TextSubstitution(text="true"),
             "enable_infra2": TextSubstitution(text="true"),
             "depth_module.infra_profile": TextSubstitution(text="848x480x30"),
+            # Keep the IR cameras for VIO, but disable the depth IR emitter
+            # (laser/speckle projector) to avoid projecting the pattern.
+            "depth_module.emitter_enabled": TextSubstitution(text="0"),
             "enable_gyro": TextSubstitution(text="true"),
             "enable_accel": TextSubstitution(text="true"),
             "gyro_fps": TextSubstitution(text="200"),

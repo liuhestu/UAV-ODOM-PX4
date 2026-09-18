@@ -2,13 +2,16 @@ OpenVINS 输出 RealSense Odom 的 3D 位姿，Adapter 用一个固定外参把�
 
 ```bash
 硬件链路：
-Ubuntu ───── Micro-USB ───── Pixhawk
+Ubuntu ──── Micro-USB ──── Pixhawk
+     | ———— USB C3.0 ————— Realsense
+     | ———— 数传 ————— Motion Capture
+    
 
 ```
 
 ```bash
 数据链路：
-OpenVINS：Odom 6 DOF
+VIO/动捕：Odom 6DOF topic
   ↓
 estimator_adapter：外参变换，发布数据
   ↓

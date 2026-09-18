@@ -2,7 +2,7 @@
 <package format="3">
   <name>estimator_adapter</name>
   <version>0.1.0</version>
-  <description>Safety-gated OpenVINS to MAVROS odometry adapter.</description>
+  <description>OpenVINS to MAVROS odometry adapter.</description>
   <maintainer email="he@example.com">he</maintainer>
   <license>BSD-3-Clause</license>
 
@@ -13,6 +13,9 @@
   <depend>eigen3_cmake_module</depend>
   <depend>eigen</depend>
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>mavros</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
 

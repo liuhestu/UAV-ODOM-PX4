@@ -21,6 +21,8 @@
 
 #include "StaticInitializer.h"
 
+#include <chrono>
+
 #include "utils/helper.h"
 
 #include "feat/FeatureHelper.h"
@@ -46,9 +48,19 @@ bool StaticInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarianc
   double newesttime = imu_data->at(imu_data->size() - 1).timestamp;
   double oldesttime = imu_data->at(0).timestamp;
 
+  // Limit initialization diagnostics by wall time, independent of sensor clock resets.
+  static auto last_window_report = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+  auto report_window = [&](const char *reason) {
+    auto now = std::chrono::steady_clock::now();
+    if (now - last_window_report < std::chrono::seconds(1)) return;
+    last_window_report = now;
+    PRINT_INFO(YELLOW "[init-s]: waiting for IMU window: reason=%s span=%.3f required=%.3f count=%zu\n" RESET,
+               reason, newesttime - oldesttime, params.init_window_time, imu_data->size());
+  };
+
   // Return if we don't have enough for two windows
   if (newesttime - oldesttime < params.init_window_time) {
-    PRINT_INFO(YELLOW "[init-s]: unable to select window of IMU readings, not enough readings\n" RESET);
+    report_window("span_too_short");
     return false;
   }
 
@@ -65,7 +77,7 @@ bool StaticInitializer::initialize(double &timestamp, Eigen::MatrixXd &covarianc
 
   // Return if both of these failed
   if (window_1to0.size() < 2 || window_2to1.size() < 2) {
-    PRINT_INFO(YELLOW "[init-s]: unable to select window of IMU readings, not enough readings\n" RESET);
+    report_window("half_window_empty");
     return false;
   }
 

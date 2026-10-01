@@ -176,3 +176,85 @@ RealSense D435i 当前枚举为 USB 2.1，驱动拒绝两路 Infrared 848×480@3
 按用户要求替代上一节 Mission 内的 5 秒/2 秒停止实现：新增 mission_executor/shutdown.py 的 ThrustStop，由公共 ExecutionController 统一处理姿态任务正常结束。Mission 仅报告工作结束，不再配置或生成降推力/零推力保持。公共 attitude_ramp_down_seconds=2.0、attitude_zero_thrust_seconds=0.5；RAMP_DOWN 从最后实际发出的目标推力开始，采用平滑曲线，再 ZERO_THRUST，结束后进入既有地面确认/DISARM。任务即使完成时直接返回零推力也不能跳过共享下降流程。rig 默认工作 3+5 秒，共享停止 2+0.5 秒，合计约 10.5 秒，不含准备/服务/落地确认。
 
 位置任务仍由共享执行器请求 PX4 AUTO.LAND，不把姿态推力包络混入位置控制。故障、接管、断连仍立即停止，不执行延迟下降；终止不恢复。新增停止中健康失效立即零推力、接管/断连不续发、任务零推力完成不跳过下降回归；125 项检查及 4 包增量构建通过。日志 Jetson /tmp/uav_shared_shutdown_checks.log、/tmp/uav_shared_shutdown_build.log。本轮未启动实际节点、电机或写参数；新 Mission 启动生效，无需重启基础系统。软件仍不保证 ESC 制动与自紧桨机械兼容性。
+
+## Jetson PX4 USB/MAVROS 连接修复（2026-10-07）
+
+PX4 通过 USB 插入 Jetson 后，设备正常枚举为 `/dev/ttyACM0`，稳定路径为：
+
+```text
+/dev/serial/by-id/usb-3D_Robotics_PX4_FMU_v5.x_0-if00
+```
+
+`jetson` 用户已属于 `dialout`，串口访问测试通过。MAVROS 首次启动立即退出时，日志中的直接原因是：
+
+```text
+liblog4cxx.so.10: cannot open shared object file: No such file or directory
+```
+
+Jetson 系统安装的是 `liblog4cxx.so.12`，兼容的 `liblog4cxx.so.10` 位于 `/usr/local/lib`；非交互式 `ssh/nohup` 启动不会自动继承交互式 shell 的库路径。因此启动 MAVROS 前必须显式加入：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source ~/uav_odom_px4/devel/setup.bash
+export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+roslaunch mavros px4.launch fcu_url:=/dev/ttyACM0:57600
+```
+
+本次使用上述环境启动后，`rostopic echo -n1 /mavros/state` 验证为：
+
+```text
+connected: True
+armed: False
+mode: "AUTO.LOITER"
+```
+
+该验证只确认 Jetson 到 PX4 的 MAVLink/FCU 连接，不启动 Mission Executor，也不请求 ARM。
+
+
+## OpenVINS 初始化与 PX4 EV 就绪排查（2026-10-07）
+
+### 问题原因
+
+本轮将 OpenVINS 内部初始化、Adapter 输出健康、PX4 实际融合和 Observer 证据获取分别检查。仅启动 RealSense 与 OpenVINS、未启动 Adapter/MAVROS/任务时，仍复现 `init-s: unable to select window of IMU readings, not enough readings`。该报错要求初始化 IMU 首尾跨度至少为配置的 2 秒，且两个 1 秒窗口各有至少两条样本；低 disparity 已满足静止条件，不能用 Adapter 拒收解释这条内部报错。
+
+原始 `/camera/imu` 在启动时先向前跳 10.368150 秒，再回退 10.449598 秒。未来样本留在初始化缓存头部，265 条样本的首尾跨度反而是 -8.992743 秒，必须等待后续时间追上才能通过。后续三轮又分别出现约 54.158、9.639、9.108 秒的启动跳变。跳变时 Jetson ROS 时间与单调接收时钟正常前进：例如 IMU 跳 54.157875 秒时，两者只前进 0.103607/0.103597 秒。因此本轮捕获事件不是 Jetson 系统时钟同步跳变造成的；异常位于 RealSense 输出时间戳链路，尚未定位 SDK/驱动中的具体机制。Jetson 日历日期整体偏慢本身不会改变 IMU 样本之间的跨度。
+
+`PR: Unknown parameter to get: SENS_IMU_MODE` 是另一项问题：MAVROS `/param/get` 查询缓存，初始下载尚未完成时可能查不到飞控实际存在的参数。当前飞控实读 `EKF2_MULTI_IMU=0`、`SENS_IMU_MODE=1`、`SENS_MAG_MODE=1`，参数拉取收到 1120 项；同时实读 `EKF2_EV_CTRL=3`、`EKF2_HGT_REF=1`，未修改任何参数。Observer 在参数校验失败后无法查询融合证据，会让 EV received/fused 检查失败；不能仅凭这种失败就断言 PX4 没有融合。
+
+### 解决方法
+
+OpenVINS 增加一次性启动 IMU 缓冲：非有限/负时间戳、重复/回退时间戳或相邻时间戳间隔超过 100 ms 时丢弃候选窗口重新收集；连续覆盖 `init_window_time + 0.10 s`（当前 2.1 秒）后才送入估计器。保留原始时间戳与测量值，原有 2 秒及半窗口初始化检查不变。接收缓存加锁，异步初始化使用私有快照，避免与 IMU 接收线程同时修改同一 vector。没有修改 RealSense 驱动、离线标定、Adapter 时间映射或 PX4 时间同步。
+
+Observer 在首次参数检查前调用只读 `ParamPull(force_pull=false)` 等待初始下载完成，随后继续严格校验三个单 EKF 参数。FCU 断连/遥测过期或参数缺失时重新等待；保留原有融合、创新拒绝、有效性、时效和重置门控，未增加参数 set/push、模式切换或解锁操作。
+
+整理后删除临时 `[init-imu]`/`[init-trim]` 周期统计及计数变量，保留限频的简短窗口不足日志和启动时间异常/成功事件。PX4 完整融合与重置快照降为 DEBUG，正常融合状态仅输出简短 INFO；融合失败与重置仍为 WARN 并保留关键字段。健康报告在 `ready && arm_ready` 时使用 INFO，否则使用 WARN，实际检查结果不变。`PX4 system_status=0` 的 standby/active 检查仍为 diagnostic only，其 FAIL 不独立阻止就绪。
+
+### 验证结果
+
+以下为本轮精简日志前完成的实测与回放结果，日志整理后没有重新启动硬件：
+
+| 验证 | 结果 |
+| --- | --- |
+| 异常 IMU 序列回放 | 识别向前跳变及回退，随后接纳 407 条样本、跨度 2.10147 秒；采集相对时间 8.66801 秒即可接纳，旧初始化直到 19.08873 秒才有 odom |
+| 已有启动缓冲回归 | 正常序列、固定 ±0.7 秒偏移、样本数值/时间戳保持、跳变/回退、断流、非法与重复时间戳、接纳后旁路均通过 |
+| 独立源实机启动第 1 轮 | 首次 IMU 到首次 odom 2.377 秒，随后约 200.35 Hz，输出时间戳回退 0 次 |
+| 独立源实机启动第 2 轮 | 首次 IMU 到首次 odom 2.387 秒，随后约 200.36 Hz，输出时间戳回退 0 次 |
+| 独立源实机启动第 3 轮 | 首次 IMU 到首次 odom 2.409 秒，随后约 200.38 Hz，输出时间戳回退 0 次 |
+| 包含 MAVROS 的基础系统全新启动 | 参数下载 1120 项；约 12.34 秒 EV received/fused/reset_valid=true，12.35 秒 ready/arm_ready=true、reasons=[]；45 秒采集剩余期间保持通过，armed 始终 false；没有 Unknown parameter 错误 |
+
+三轮源检查各采集约 23 秒初始化后的 odom，接收年龄中位数约 4.3 ms。第二轮启动附近短暂出现 odom 比 ROS 时间领先约 56 ms，故独立源检查只证明初始化恢复和持续输出；Adapter/PX4 融合以随后完整基础系统的观察为依据。基础系统使用隔离 master 11339、正式 OpenVINS 源配置，没有 Mission Executor。65 秒有界启动结束时的 listener timeout 位于关闭尾部，不作为 45 秒采集期内的融合故障。所有本轮验证启动的节点均已停止。
+
+### 验证边界与构建注意事项
+
+启动缓冲只在首次接纳前生效，不处理接纳后或飞行中的时间跳变；不得用自动时间对齐掩盖后续故障。本轮没有实施 `odomimu -> Jetson` 的动态输出时间校准，没有写 PX4 参数、ARM、电机任务或飞行。系统就绪与 EV 位置/高度融合通过不证明实际悬停、yaw 控制或失效降落可靠性。
+
+Jetson 构建目录曾包含时间戳晚于当前系统时间的产物，造成 catkin 返回成功但跳过新代码。本轮删除受影响的生成对象、库和可执行文件后重编译，并检查产物内的诊断字符串确认修复实际进入二进制。日志精简后的检查结果记录在下节；实测数据不能作为精简后代码再次运行的证据。
+
+证据均在 Jetson：`/tmp/ov_init_baseline*`、`/tmp/ov_init_diagnostic_compiled*`、`/tmp/ov_init_three_starts/`、`/tmp/ov_init_fix_build.log`、`/tmp/uav_px4_param_fix_startup.log`、`/tmp/uav_px4_param_fix_monitor.log`/`.json`。这些是临时文件，可能随清理失效；记录日期为 2026-10-07，不把 Jetson 当时的日历时间视为实际验证日期。
+
+
+### 日志整理后的检查
+
+本次仅整理代码与记录，未重新启动相机、MAVROS、基础系统或任务。两个 Python 节点语法检查通过；静态检查确认完整 snapshot 只使用 DEBUG，健康报告根据 ready/arm_ready 选择 INFO/WARN。受影响的 ov_init 两个 C++ 对象与共享库已删除后重新编译，ov_core/ov_init 两包构建成功；产物检查确认简短窗口日志存在，临时 `[init-imu]`、`[init-trim]` 日志已移除。Git 空白检查通过，没有新增或运行单元测试，保留已有启动缓冲与融合证据回归用例。本轮新增的两份独立排查文档已归并到本节并删除。
+
+构建证据：Jetson `/tmp/uav_diagnostic_cleanup_build.log`。基础系统下一次启动会加载精简后的节点和库；上面的三轮源启动及 45 秒基础系统观察均为精简前记录。

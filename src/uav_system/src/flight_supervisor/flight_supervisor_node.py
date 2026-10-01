@@ -107,7 +107,7 @@ def main():
                     adapter.detail if adapter else 'unavailable/stale',
                     fault[0] or 'none', fcu.system_status if fcu else 'unavailable/stale',
                     '; '.join(ekf_failures) if ekf_failures else 'valid')
-                log = rospy.loginfo if all(passed for _, passed in checks) else rospy.logwarn
+                log = rospy.loginfo if ready and arm_ready else rospy.logwarn
                 log('%s', report + detail)
             msg = SystemStatus(); msg.header.stamp=rospy.Time.now()
             msg.source_session_id=session[0] or ''; msg.ready=ready; msg.arm_ready=arm_ready

@@ -165,6 +165,19 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
 
 void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
 
+  if (!is_initialized_vio && !startup_imu_buffer.ready()) {
+    auto admitted = startup_imu_buffer.push(message, params.init_options.init_window_time + 0.10);
+    if (startup_imu_buffer.reset_reason() != nullptr) {
+      PRINT_WARNING(YELLOW "[init-clock]: restart startup IMU collection: reason=%s stamp=%.9f gap=%.6f\n" RESET,
+                    startup_imu_buffer.reset_reason(), message.timestamp, startup_imu_buffer.last_gap());
+    }
+    if (admitted.empty()) return;
+    PRINT_INFO(GREEN "[init-clock]: admitted continuous IMU window: count=%zu span=%.6f\n" RESET,
+               admitted.size(), admitted.back().timestamp - admitted.front().timestamp);
+    for (const auto &sample : admitted) feed_measurement_imu(sample);
+    return;
+  }
+
   // The oldest time we need IMU with is the last clone
   // We shouldn't really need the whole window, but if we go backwards in time we will
   double oldest_time = state->margtimestep();

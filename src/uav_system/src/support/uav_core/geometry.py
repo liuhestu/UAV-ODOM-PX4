@@ -37,11 +37,18 @@ def vector(v):
 
 def covariance(c):
     c = np.asarray(c, dtype=float).reshape(6, 6)
-    if not np.isfinite(c).all() or not np.allclose(c, c.T, atol=1e-6):
-        raise ValueError('invalid covariance')
+    if not np.isfinite(c).all():
+        bad = np.argwhere(~np.isfinite(c))
+        index = tuple(int(v) for v in bad[0]) if bad.size else None
+        raise ValueError('invalid covariance: nonfinite element %s' % (index,))
+    asym = float(np.max(np.abs(c-c.T)))
+    if asym > 1e-6:
+        index = np.unravel_index(int(np.argmax(np.abs(c-c.T))), c.shape)
+        raise ValueError('invalid covariance: asymmetric max=%.3g at %s' % (asym, index))
     c = (c+c.T)*0.5
-    if np.linalg.eigvalsh(c).min() < -1e-7:
-        raise ValueError('covariance is not positive semidefinite')
+    eig = np.linalg.eigvalsh(c)
+    if eig.min() < -1e-7:
+        raise ValueError('covariance is not positive semidefinite: min_eigenvalue=%.6g' % eig.min())
     return c
 
 

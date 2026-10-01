@@ -32,6 +32,8 @@
 #include <string>
 
 #include "VioManagerOptions.h"
+#include "init/StartupImuBuffer.h"
+#include "utils/sensor_data.h"
 
 namespace ov_core {
 struct ImuData;
@@ -190,6 +192,9 @@ protected:
 
   /// Our aruoc tracker
   std::shared_ptr<ov_core::TrackBase> trackARUCO;
+
+  /// Admit a continuous startup IMU window before any estimator buffer is fed.
+  ov_init::StartupImuBuffer<ov_core::ImuData> startup_imu_buffer;
 
   /// State initializer
   std::shared_ptr<ov_init::InertialInitializer> initializer;

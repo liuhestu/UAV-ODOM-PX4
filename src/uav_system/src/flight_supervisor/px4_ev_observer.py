@@ -12,7 +12,7 @@ import threading
 import time
 import rospy
 from mavros_msgs.msg import Mavlink, State
-from mavros_msgs.srv import ParamGet
+from mavros_msgs.srv import ParamGet, ParamPull
 from uav_system.msg import SourceStatus, EvStatus
 from flight_supervisor.checks import (TOPICS, SINGLE_EKF_PARAMETERS, parse_listener,
                                inspect_listener, verify_single_ekf_parameters)
@@ -59,14 +59,29 @@ def main():
         msg.payload64=list(struct.unpack('<10Q',payload.ljust(80,b'\0')))
         seq[0]=(seq[0]+1)%256; to.publish(msg)
     rospy.on_shutdown(lambda:send('',0))
+    parameters_ready=False
     def verify_single_ekf():
+        nonlocal parameters_ready
+        # ParamGet reads MAVROS's cache, not the FCU. Wait for the initial
+        # download instead of interpreting a partially populated cache as a
+        # firmware parameter missing. ParamPull is strictly read-only.
+        if not parameters_ready:
+            rospy.wait_for_service('/mavros/param/pull',timeout=1)
+            rospy.loginfo('PX4 EV observer: waiting for MAVROS parameter download')
+            pull=rospy.ServiceProxy('/mavros/param/pull',ParamPull)
+            reply=pull(force_pull=False)
+            if not reply.success or reply.param_received <= 0:
+                raise ValueError('waiting for complete MAVROS parameter download')
+            parameters_ready=True
+            rospy.loginfo('PX4 EV observer: MAVROS parameter download ready (%d parameters)',reply.param_received)
         rospy.wait_for_service('/mavros/param/get',timeout=1)
         get=rospy.ServiceProxy('/mavros/param/get',ParamGet)
         parameters={}
         for name in SINGLE_EKF_PARAMETERS:
             reply=get(param_id=name)
             if not reply.success:
-                raise ValueError('single EKF parameter unavailable: '+name)
+                parameters_ready=False
+                raise ValueError('single EKF parameter unavailable after MAVROS parameter download: '+name)
             parameters[name]=reply.value.integer
         verify_single_ekf_parameters(parameters)
     def query(topic):
@@ -86,10 +101,14 @@ def main():
     previous_reset=None
     while not rospy.is_shutdown():
         start=time.monotonic(); msg=EvStatus(); msg.header.stamp=rospy.Time.now()
+        samples={}
         try:
             with box.lock:
                 source=box.get('source',p['source_timeout']); fcu=box.get('fcu',p['source_timeout'])
-            if not source or not source.healthy or not fcu or not fcu.connected: raise ValueError('source/FCU unavailable')
+            if not fcu or not fcu.connected:
+                parameters_ready=False
+                raise ValueError('source/FCU unavailable')
+            if not source or not source.healthy: raise ValueError('source/FCU unavailable')
             if to.get_num_connections()==0: raise ValueError('MAVROS raw MAVLink bridge unavailable')
             verify_single_ekf()
             samples={topic:query(topic) for topic in TOPICS}
@@ -100,8 +119,13 @@ def main():
             msg.detail=('single EKF instance 0: '+('; '.join(failures) if failures else
                         'EV position/height fusion observed'))
             if previous_reset is not None and previous_reset!=msg.reset_counter:
-                rospy.logwarn('PX4 estimator reset counters changed: %s -> %s; counters=%s',
-                              previous_reset,msg.reset_counter,json.dumps(samples['vehicle_local_position'],sort_keys=True))
+                local=samples.get('vehicle_local_position',{})
+                flags=samples.get('estimator_status_flags',{})
+                rospy.logwarn('PX4 estimator reset: counters=%s->%s heading=%s delta_heading=%s heading_reset_counter=%s EV_pos=%s EV_hgt=%s EV_yaw=%s reject_yaw=%s',
+                              previous_reset,msg.reset_counter,local.get('heading'),local.get('delta_heading'),
+                              local.get('heading_reset_counter'),flags.get('cs_ev_pos'),flags.get('cs_ev_hgt'),
+                              flags.get('cs_ev_yaw'),flags.get('reject_yaw'))
+                rospy.logdebug('PX4 estimator reset snapshot: %s', json.dumps(samples,sort_keys=True))
             previous_reset=msg.reset_counter
         except (ValueError,KeyError,TypeError,rospy.ROSException,rospy.ServiceException) as exc:
             msg.detail=str(exc)
@@ -109,8 +133,8 @@ def main():
         if snapshot!=previous:
             log=rospy.loginfo if msg.received and msg.fused else rospy.logwarn
             log('PX4 EV evidence: %s',msg.detail)
-            if msg.reset_valid and not (msg.received and msg.fused):
-                rospy.logwarn('PX4 EV failed observation: %s',json.dumps(samples,sort_keys=True))
+            if samples:
+                rospy.logdebug('PX4 EV observation snapshot: %s',json.dumps(samples,sort_keys=True))
             previous=snapshot
         pub.publish(msg)
         time.sleep(max(0.01,p['poll_seconds']-(time.monotonic()-start)))

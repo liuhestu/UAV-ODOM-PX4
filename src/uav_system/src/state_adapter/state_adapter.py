@@ -10,6 +10,21 @@ from uav_core.geometry import Adapter
 from uav_core.runtime import assign, xyz, xyzw, wall_loop
 
 
+def covariance_summary(values):
+    try:
+        c = np.asarray(values, dtype=float).reshape(6, 6)
+        finite = bool(np.isfinite(c).all())
+        if not finite:
+            bad = np.argwhere(~np.isfinite(c))
+            return 'finite=False bad_index=%s' % (tuple(int(v) for v in bad[0]) if bad.size else None,)
+        asym = float(np.max(np.abs(c-c.T)))
+        eig = np.linalg.eigvalsh((c+c.T)*0.5)
+        index = np.unravel_index(int(np.argmax(np.abs(c-c.T))), c.shape)
+        return 'finite=True asym=%.3g asym_index=%s min_eig=%.6g diag=%s' % (asym, index, eig.min(), np.diag(c).round(6).tolist())
+    except Exception as exc:
+        return 'summary_error=%s' % (exc,)
+
+
 def main():
     rospy.init_node('state_adapter')
     cfg = load_source(rospy.get_param('~source_config'))
@@ -18,7 +33,7 @@ def main():
     health_pub = rospy.Publisher('/uav/state/health', SourceStatus, queue_size=1)
     mutex = threading.RLock()
     state = dict(last_stamp=None, last_p=None, last_receive=None, source=None, source_at=None,
-                 session=None, last_q=None, fault='', error='waiting for odometry')
+                 session=None, last_q=None, fault='', error='waiting for odometry', last_reject=None)
     def source(msg):
         with mutex:
             if state['session'] and msg.session_id != state['session']:
@@ -57,9 +72,20 @@ def main():
                 state.update(last_stamp=stamp, last_p=p, last_q=q, last_receive=time.monotonic(), error='')
                 odom_pub.publish(out)
             except (ValueError, KeyError, TypeError) as exc:
-                state['error'] = str(exc)
+                detail = str(exc)
+                first = detail != state['last_reject']
+                state['last_reject'] = detail
+                state['error'] = detail
                 state['last_receive'] = None
-                rospy.logwarn_throttle(2, 'adapter rejected odometry: %s', exc)
+                label = 'first' if first else 'repeated'
+                rospy.logwarn_throttle(
+                    2, 'Adapter %s rejection: reason=%s stamp=%.9f age=%.6f frame=%s child=%s p=%s q=%s q_norm=%.6f pose_cov={%s} twist_cov={%s}',
+                    label, detail, stamp, (rospy.Time.now()-msg.header.stamp).to_sec(),
+                    msg.header.frame_id, msg.child_frame_id,
+                    np.asarray(xyz(msg.pose.pose.position)).round(6).tolist(),
+                    np.asarray(xyzw(msg.pose.pose.orientation)).round(6).tolist(),
+                    float(np.linalg.norm(np.asarray(xyzw(msg.pose.pose.orientation)))),
+                    covariance_summary(msg.pose.covariance), covariance_summary(msg.twist.covariance))
     rospy.Subscriber('/uav/source/status', SourceStatus, source, queue_size=1)
     rospy.Subscriber(cfg['input']['topic'], Odometry, raw, queue_size=1)
     def tick():

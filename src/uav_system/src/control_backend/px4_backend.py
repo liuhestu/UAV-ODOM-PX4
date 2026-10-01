@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """MAVROS boundary. No controller math, firmware writes, or automatic arm."""
 import copy
+import math
 import time
 import numpy as np
 import rospy
@@ -33,7 +34,7 @@ def main():
     attitude_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=1)
     sent_pub = rospy.Publisher('/uav/backend/ev_sent', Bool, queue_size=1)
     tf_buffer = tf2_ros.Buffer(); tf_listener = tf2_ros.TransformListener(tf_buffer)
-    last_ev = [None]; last_tx = [None]; stream_start=[None]; last_stream=[None]; stream_kind=[None]
+    last_ev = [None]; last_tx = [None]; stream_start=[None]; last_stream=[None]; stream_kind=[None]; ev_link=[None]
     def transport_ok():
         return not p['simulation_transport'] or rospy.get_param('/mavros/fcu_url', '')=='udp://:14540@127.0.0.1:14557'
     def eligible():
@@ -103,7 +104,16 @@ def main():
                     rotation(xyzw(odom.pose.pose.orientation)); covariance(odom.pose.covariance); covariance(odom.twist.covariance)
                     if not np.isfinite(xyz(odom.pose.pose.position)+xyz(odom.twist.twist.linear)+xyz(odom.twist.twist.angular)).all(): raise ValueError('nonfinite canonical odometry')
                     transforms_ok = tf_buffer.can_transform('odom_ned', 'odom', rospy.Time(0)) and tf_buffer.can_transform('base_link_frd', 'base_link', rospy.Time(0))
-                    if transforms_ok and ev_pub.get_num_connections()>0:
+                    ev_ready = bool(transforms_ok and ev_pub.get_num_connections()>0)
+                    if ev_ready != ev_link[0]:
+                        yaw = math.atan2(rotation(xyzw(odom.pose.pose.orientation))[1,0], rotation(xyzw(odom.pose.pose.orientation))[0,0])
+                        rospy.loginfo('EV link edge: ready=%s can_tx=%s tf_ready=%s subscribers=%s stamp=%.9f age=%.6f yaw=%.6f z=%.6f pose_diag=%s twist_diag=%s',
+                                      ev_ready, can_tx, transforms_ok, ev_pub.get_num_connections(),
+                                      odom.header.stamp.to_sec(), (rospy.Time.now()-odom.header.stamp).to_sec(), yaw,
+                                      odom.pose.pose.position.z, [odom.pose.covariance[i] for i in (0,7,14,21,28,35)],
+                                      [odom.twist.covariance[i] for i in (0,7,14,21,28,35)])
+                        ev_link[0] = ev_ready
+                    if ev_ready:
                         ev_pub.publish(odom); last_ev[0]=odom.header.stamp; last_tx[0]=time.monotonic()
                 except ValueError as exc:
                     rospy.logwarn_throttle(2, '%s', exc)

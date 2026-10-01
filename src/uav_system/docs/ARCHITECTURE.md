@@ -102,8 +102,8 @@ roslaunch uav_system mission_executor.launch mission_source:=propellerless_motor
 ### 任务选择与参数覆盖
 
 ```bash
-# 实际模式/ARM 确认后保持当时 xyz/yaw，按任务配置时长后降落；不主动爬升。
-roslaunch uav_system mission_executor.launch mission_source:=propellerless_motor_check
+# 实际模式/ARM 确认后保持当时 xyz/yaw，按任务配置时长后降落。
+roslaunch uav_system mission_executor.launch mission_source:=takeoff_hover_land
 
 # 指定任务配置与公共执行配置。
 roslaunch uav_system mission_executor.launch mission_source:=propellerless_motor_check \

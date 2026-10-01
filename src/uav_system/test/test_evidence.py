@@ -11,7 +11,7 @@ from flight_supervisor.checks import (TOPICS, SINGLE_EKF_PARAMETERS, parse_liste
 # Import the actual observer with inert ROS substitutes; main() is never called.
 modules={}
 for name,fields in {'rospy':(), 'mavros_msgs.msg':('Mavlink','State'),
-                    'mavros_msgs.srv':('ParamGet',),
+                    'mavros_msgs.srv':('ParamGet','ParamPull'),
                     'uav_system.msg':('SourceStatus','EvStatus')}.items():
     module=types.ModuleType(name)
     for field in fields:setattr(module,field,object)

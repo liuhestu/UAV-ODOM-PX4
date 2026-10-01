@@ -1,0 +1,16 @@
+# Fixed software-test scenario; independent of live flight settings.
+auto_arm: true
+fcu_system_id: 1
+fcu_component_id: 1
+rate_hz: 30.0
+prestream_seconds: 2.5
+ready_stable_seconds: 2.0
+transition_timeout: 8.0
+landing_timeout: 60.0
+status_timeout: 0.5
+state_timeout: 0.5
+telemetry_timeout: 2.0
+max_local_position_step: 0.5
+max_attitude_thrust: 0.30
+attitude_ramp_down_seconds: 2.0
+attitude_zero_thrust_seconds: 0.5

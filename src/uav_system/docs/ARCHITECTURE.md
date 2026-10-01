@@ -371,3 +371,21 @@ PX4 的机体参考原点按参数约定为车辆重心；EKF 内部在飞控 IM
 统一入口通过 `state_source:=mock start_mission_executor:=true mission_source:=rig_attitude_hold` 组合软件数据源和任务。mock 数据源强制禁用 MAVROS、EV Observer、Backend 输出及自动 ARM，即使显式传 true 也不会打开这些选项；因此只能观察 WAIT_SYSTEM，不能宣称电机或姿态控制验证成功。State Source Manager 根据 `config/state_sources/mock.yaml` 的 `source.nodes` 直接管理模拟节点生命周期，mock_source.launch 已删除。
 
 默认 Mission 在两个 launch 入口、直接节点启动和 Python 加载器中均为 propellerless_motor_check。默认任务无爬升，但仍按公共 auto_arm 配置解锁，仅限卸桨测试。takeoff_hover_land 必须显式选择。正常任务之间可保留基础链；结束旧 Executor 后再启动新任务，终止任务不恢复。
+
+
+## 生产日志与验证记录
+
+专项 yaw JSONL 记录器、额外 Mission yaw 对照日志及完整 Observer snapshot 话题已移除。运行仍保留任务阶段/结果、EV 融合证据状态变化和 PX4 重置告警；EV Observer 的五项查询、参数下载等待、时间有效性与重置保护不变。
+
+记录定位、控制反馈及故障时间线时使用 ROS bag，例如：
+
+```bash
+rosbag record -O flight_trace.bag \
+  /ov_msckf/odomimu /uav/state/odom /uav/source/status /uav/state/health \
+  /uav/system/status /uav/px4/ev_status /uav/backend/ev_sent \
+  /uav/mission_executor/state /uav/command/trajectory /uav/command/attitude \
+  /mavros/local_position/odom /mavros/state /mavros/extended_state \
+  /mavros/estimator_status /mavros/timesync_status /rosout
+```
+
+PX4 内部磁场、创新和重置细节使用匹配飞行轮次的原生 ULog。ROS bag 不提供已移除记录器的单调接收时钟，也不等同于 PX4 原生全速记录。历史 JSONL/bag 中存在旧诊断话题不代表当前接口仍支持它们。

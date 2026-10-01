@@ -311,20 +311,13 @@ TAKEOFF 至 ABORTED 窗口共 2629 条原始 odom，最大非对称为 3.2526065
 
 证据位于 `flight_acceptance.kbhjhR/`，包括 `acceptance_analysis.json`、`flight_trace.bag`、`mission.log`、`system.log`、`yaw.jsonl`。任务时间线来自实际 mission.log；bag 未收到 `/uav/mission/status`，不能把缺失话题当作已记录。该轮未下载新的 PX4 ULog，重置结论来自 Observer 实读计数和系统故障日志。
 
-### 待排查问题：PX4 航向重置
+### 排查阶段：PX4 航向重置
 
 用户随后自行运行一轮：ROS 1790878328.433852～1790878328.500528，PX4 local yaw 从 1.979759 跳到 1.200158 rad，约 44.7°。基础系统在 1790878328.925773 报告 heading_reset_counter=3、delta_heading=0.77951 rad；源、Adapter、canonical、EV 发布与融合均 PASS，唯一故障为 PX4 estimator reset。随后任务保护降落。证据为 Jetson `~/.ros/log/8ad0e338-bdc3-11f1-b202-f9058410b324/rosout.log` 和对应节点日志。
 
-该轮退出由航向重置触发，不能据此认为协方差修复失效。日志中的估计航向跳变不等同于实际机体转动；重置的触发机制和历史 yaw 突转仍待 PX4 ULog 排查。对这轮的判断来自健康检查日志，没有完整原始协方差 bag 的逐条统计。
+该轮退出由航向重置触发，不能据此认为协方差修复失效。日志中的估计航向跳变不等同于实际机体转动；当时重置的触发机制和历史 yaw 突转尚待 PX4 ULog 排查；后续 ULog 及参数验证见下文。对这轮的判断来自健康检查日志，没有完整原始协方差 bag 的逐条统计。
 
-保留只读 `/uav/px4/observer_snapshot` 和可选 `yaw_diagnostics.py` 用于后续排查。通过 `uav_system.launch` 的 `yaw_diagnostics_file` 指定新文件启用，默认关闭：
-
-```bash
-roslaunch uav_system uav_system.launch state_source:=openvins \
-  yaw_diagnostics_file:=/tmp/yaw_run_next.jsonl
-```
-
-JSONL 以 10 Hz 保存各话题最新值、原始 stamp 和接收年龄，缺失话题不伪造数据，文件独占创建。Observer 各项查询为顺序采样；10 Hz 重复状态不证明原生遥测连续性，精确时序应结合 ROS bag 与 PX4 ULog。上述基础启动命令不包含 Mission。
+排查阶段曾使用 `yaw_diagnostics.py` 和 `/uav/px4/observer_snapshot` 生成诊断记录；它们已在后续生产代码整理中移除，旧 `yaw_diagnostics_file` launch 参数不再支持。已有 JSONL、旧话题 bag 和验证结果仍保留为历史证据，不能据此认为当前节点仍发布完整快照。当前采集使用 ROS bag 与 PX4 ULog，运行必需的 `/uav/px4/ev_status`、健康状态和简短重置告警保持有效。
 
 此次整理只删除临时测试、精简注释和文档，静态检查删除项引用、诊断标记及补丁空白；未新增或运行测试，未构建、启动硬件或执行任务。`flight_logs/` 的原始记录及归档证据保留，构建摘要对应此前验证的版本。
 
@@ -397,3 +390,27 @@ JSONL 以 10 Hz 保存各话题最新值、原始 stamp 和接收年龄，缺失
 第一轮准备会话曾因前一个 ROS master 退出而中断，尚未启动 Mission；保留 preparation_failed 文件后重新建立基础链，不计作额外飞行。第二轮使用独立 master 11349，两个测试记录分目录保存。两轮均未复现此前协方差拒收、空中航向重置或约一倍高度差异；这两轮实测不代表所有工况与视觉失效行为均已验证。
 
 证据目录：`flight_logs/ev_height_tests.L4TGdP/`，含参数修改记录、ground/summary.json、round1/round2 的完整 ROS bag、JSONL、任务/系统日志和 flight_analysis.json；第一轮另有完整 px4_log_351.ulg/ulog_analysis.json，第二轮保留下载失败记录。所有本轮后台节点与记录器已确认停止，PX4 参数维持 `EKF2_EV_CTRL=11`、`EKF2_HGT_REF=3`。
+
+
+## 专项诊断清理与软件验证（2026-10-07）
+
+在两轮起降验证后，按用户选择删除专项 yaw JSONL 记录器、Mission 的额外 yaw 对照日志，以及 `/uav/px4/observer_snapshot` 完整诊断话题、逐项查询时间记录和完整状态 DEBUG 打印。同步删除 launch 的 `yaw_diagnostics_file` 参数、节点和 CMake 安装项；现有受保护的 catkin 旧包装清理名单增加该节点，确认 devel 包装入口已移除。该参数和话题是本次明确移除的诊断接口，旧启动命令需去掉该参数。
+
+生产逻辑继续保留 PX4 EV Observer 的五项只读查询、单 EKF 参数下载等待、时间/融合有效性判定、重置计数与简短告警、EvStatus 输出及健康/任务状态日志。初始化和协方差状态快照修复、任务流程、Backend、watchdog、空中禁上锁等运行保护未修改；PX4 参数及全部生产 YAML 未修改。`test/` 通用单元测试、mock 数据源和软件等待验证入口逐文件与基线核对一致；历史 JSONL、ROS bag、ULog 与第三方目录保留。
+
+运行统一 `run_checks.sh`：125 项测试，记录 24 处失败（包含子测试），无导入或执行错误。另将当前提交 648d0ce 导出到临时目录，用隔离的 Python 导入路径运行同一套测试，仍为 125 项、24 处失败；失败用例名称与断言消息均一致。因此本次清理没有新增这些失败，但不能将软件检查报告为全绿。现有失败涉及任务时序和姿态推力等断言，包括测试预期 0.1 而当前任务输出 0.25 的情况；这些既有测试/配置适配问题留作单独维护，未通过更改生产参数或删除用例掩盖。
+
+`catkin build uav_system --no-deps --force-cmake --no-status -j2 -p1` 单包构建成功（约 6.2 秒），其他包未重建。删除源码、生成包装入口、launch 与安装引用检查通过；飞书《五、PX4+OpenVINS》当前相关目录已折叠，全文未发现专项记录器或完整快照引用，因此同步核查无需重新改写。当前推荐记录方式为 ROS bag 加匹配轮次的 PX4 ULog，示例见 ARCHITECTURE.md 的“生产日志与验证记录”。
+
+验证记录：Jetson `/tmp/uav-diagnostic-cleanup-e41nq9t4/` 中的 checks.log、checks_isolated.log、baseline_checks_isolated.log、test_comparison.json、build.log、build_final.log。最终单包重建成功，并确认 devel、生成 installspace 和 atomic_configure 中均无已删除节点入口；仅清理了该节点的构建缓存。临时文件可能随系统清理失效。本次只进行了代码/文档整理、软件测试和单包构建，没有启动相机、MAVROS、Mission、ARM 或新一轮实机测试。
+
+
+## 通用测试与实机参数解耦（2026-10-08）
+
+专项诊断清理后发现的 24 处测试失败（含子测试）已定位为测试输入与断言不一致：18 处起飞流程记录仍假设 0.5 m、0.15 m/s、较短悬停及 20 秒起飞超时，而 helper 实际读取已调为 0.6 m、0.2 m/s、15 秒和 30 秒的生产 YAML；另 6 处调试架测试使用 0.10 推力、3 秒升推力和较短保持的断言，却加载了 0.25 推力、1.5 秒升推力、100 秒保持的生产配置。它们不是单包构建失败，也不否定已完成的实机任务。
+
+新增 `test/fixtures/` 中三份固定配置：公共 Executor、takeoff_hover_land、rig_attitude_hold。行为测试通过测试 helper 显式传入这些 YAML，仍使用真实生产任务工厂与加载器；移除原 helper 无效的 config 参数。状态机/运行器/调试架测试不再因实机调参改变测试场景。原有测试方法和断言逐方法 AST 核对保持一致，没有删除失败用例或放宽断言。
+
+新增两个回归用例：行为测试不得读取生产配置且公共测试配置每次独立读取；三种实际任务的当前生产配置能通过真实加载器验证并产生 TaskUpdate，不固定其可调数值。测试配置不安装为实机配置，不用于 ROS Mission 运行。生产源码、全部 YAML、launch 和 CMake 与本次修改前的内容哈希核对一致。
+
+运行统一 `run_checks.sh`，共 127 项测试全部通过，无失败或错误，Git 补丁空白检查通过。记录为 Jetson `/tmp/uav-test-fixture-fix-hr0h38a0/checks_final.log`、production_manifest.json、result.json；临时记录可能随清理失效。此次只修改测试配置/辅助函数、测试加载入口与文档，未启动相机、MAVROS、Mission 或修改飞控参数。无需因测试修正改变已验证的实机配置；此前清理阶段“125 项、24 处既有失败”为历史结果，已由本节的软件验证关闭。

@@ -1,7 +1,7 @@
 """Attitude rig envelope, lifecycle and fault regression without hardware."""
 import math
 import unittest
-from support import ROOT
+from support import ROOT, load_fixture_task
 from mission_executor.mission_loader import load_task
 from mission_executor.execution import AttitudeCommand, ExecutionController, TaskUpdate
 from mission_executor.shutdown import ThrustStop
@@ -9,7 +9,7 @@ from mission_executor.shutdown import ThrustStop
 
 class StandTests(unittest.TestCase):
     def setUp(self):
-        self.loaded=load_task(ROOT,'rig_attitude_hold')
+        self.loaded=load_fixture_task('rig_attitude_hold')
         self.task=self.loaded.task
         self.m=ExecutionController(self.loaded.executor_config,self.task)
         self.local=(1.,2.,3.,.6)

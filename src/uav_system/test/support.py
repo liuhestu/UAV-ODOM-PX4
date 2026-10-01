@@ -6,11 +6,22 @@ sys.path.insert(0,str(ROOT/'src/support'))
 sys.path.insert(0,str(ROOT/'src'))
 
 
-def takeoff_task(config):
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('test_takeoff_task', ROOT/'src/mission/takeoff_hover_land.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+FIXTURES = ROOT / 'test/fixtures'
+
+
+def executor_config():
+    """Return a fresh common config for deterministic behavior tests."""
     import yaml
-    task_config = yaml.safe_load((ROOT/'config/mission/takeoff_hover_land.yaml').read_text())
-    return module.create_task(task_config)
+    return yaml.safe_load((FIXTURES / 'mission_executor.yaml').read_text())
+
+
+def load_fixture_task(name):
+    """Use real task code/loader with explicit, test-owned YAML files."""
+    from mission_executor.mission_loader import load_task
+    return load_task(ROOT, name,
+                     config=str(FIXTURES / (name + '.yaml')),
+                     executor_config=str(FIXTURES / 'mission_executor.yaml'))
+
+
+def takeoff_task():
+    return load_fixture_task('takeoff_hover_land').task

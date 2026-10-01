@@ -95,7 +95,7 @@ def run(cfg, task):
             with result_lock:
                 pending['result']=(action,accepted)
         threading.Thread(target=worker,daemon=True).start()
-    previous=[None]; last_local=[None]; jump_fault=[False]; result_reported=[False]; yaw_diag=[None]
+    previous=[None]; last_local=[None]; jump_fault=[False]; result_reported=[False]
     def tick():
         with box.lock:
             if guard.fault and mission.state not in mission.TERMINAL:
@@ -131,19 +131,6 @@ def run(cfg, task):
                 (fcu.connected,fcu.armed,fcu.mode) if fcu else None,local,ext.landed_state if ext else 0,result,busy,
                 bool(fcu and offboard_sent_at[0] is not None and
                      box.data['fcu'][1]>offboard_sent_at[0]))
-        if cmd is not None and local is not None and not isinstance(cmd, AttitudeCommand):
-            target_yaw = float(cmd[3])
-            yaw_error = math.atan2(math.sin(target_yaw-local[3]), math.cos(target_yaw-local[3]))
-            mode = getattr(fcu, 'mode', None)
-            armed = getattr(fcu, 'armed', None)
-            previous_yaw = yaw_diag[0]
-            edge = (previous_yaw is None or previous_yaw[0] != mission.state or
-                    previous_yaw[1] != mode or previous_yaw[2] != armed or
-                    abs(yaw_error-previous_yaw[3]) > 0.2)
-            if edge:
-                rospy.loginfo('Mission yaw diagnostic: state=%s target_yaw=%.6f current_yaw=%.6f error=%.6f local_z=%.6f mode=%s armed=%s',
-                              mission.state, target_yaw, local[3], yaw_error, local[2], mode, armed)
-            yaw_diag[0]=(mission.state,mode,armed,yaw_error)
         if action: request(action)
         if cmd is not None:
             if isinstance(cmd,AttitudeCommand):

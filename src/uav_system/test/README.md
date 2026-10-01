@@ -38,3 +38,16 @@ Noetic 环境下可运行 `python3 src/uav_system/test/verify_executor_wait.py`�
 `test_rig_attitude_hold.py` 检查姿态任务的升降推力包络、初始偏航、实际 ARM 后开始、零推力准备/结束、地面确认后上锁、故障终止及空中禁上锁。Backend/runtime 替身测试覆盖姿态帧/掩码/四元数/推力上限、MAVROS scaling、两种目标互斥，以及健康丢失时仅允许零推力清理。隔离 ROS 检查还故意传入 mock 数据源输出/ARM/MAVROS=true，验证统一入口仍关闭硬件路径。
 
 `test_source_config.py` 验证直接数据源节点声明、现有 launch 配置兼容、重复/非法节点及参数类型拒绝；隔离 ROS 验证模拟节点实际启动和故障模式。
+
+
+## 固定测试场景与实机配置
+
+状态机、运行器与调试架行为测试使用 `test/fixtures/` 中独立的任务和公共执行配置，通过 `support.load_fixture_task()` 加载真实生产任务代码与加载器。这些 YAML 是测试输入，不会替换或安装为 `config/` 下的实机参数。
+
+- `takeoff_hover_land.yaml`：0.5 m、0.15 m/s、悬停 5 秒、起飞超时 20 秒，用于已有确定性流程/公式断言。
+- `rig_attitude_hold.yaml`：推力 0.10、升推力 3 秒、保持 5 秒，用于推力包络和公共结束流程断言。
+- `mission_executor.yaml`：固定的就绪、预发送、转换与清理时序；每次读取返回独立配置，避免测试间修改泄漏。
+
+实机参数仍来自包内 `config/`，当前已验证的起降设置不因单元测试改动。`test_mission_tasks.py` 分别检查行为测试不读取实机 YAML、以及三种任务的实际配置能通过生产加载器验证并生成有效的 TaskUpdate。后者不把合法的调参值固定为某个历史默认值，也不等同于实飞可靠性验证。
+
+之前 24 处失败来自固定断言与可变实机配置耦合；修正配置输入后保留原断言和安全故障覆盖，不通过改变飞行参数或降低判定标准使测试通过。

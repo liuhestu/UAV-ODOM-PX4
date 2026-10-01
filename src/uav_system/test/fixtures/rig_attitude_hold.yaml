@@ -1,0 +1,4 @@
+# Deterministic rig envelope; never a real motor configuration.
+thrust: 0.10
+ramp_up_seconds: 3.0
+hold_seconds: 5.0

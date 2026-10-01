@@ -17,7 +17,7 @@ catkin_package(CATKIN_DEPENDS std_msgs message_runtime)
 
 # Removed relays can shadow domain packages after an incremental migration.
 # Only remove catkin-generated wrappers, never arbitrary executable files.
-foreach(old_node flight_supervisor.py control_backend_node.py commander_node.py takeoff_hover_land.py)
+foreach(old_node flight_supervisor.py control_backend_node.py commander_node.py takeoff_hover_land.py yaw_diagnostics.py)
   set(old_relay "${CATKIN_DEVEL_PREFIX}/${CATKIN_PACKAGE_BIN_DESTINATION}/${old_node}")
   if(EXISTS "${old_relay}")
     file(READ "${old_relay}" relay_header LIMIT 256)
@@ -27,13 +27,15 @@ foreach(old_node flight_supervisor.py control_backend_node.py commander_node.py 
   endif()
 endforeach()
 
+# Remove the retired node's generated install copy after an incremental build.
+file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/catkin_generated/installspace/yaw_diagnostics.py")
+
 # Independent domain modules, exported by one ROS package.
 catkin_install_python(PROGRAMS
   ${CMAKE_CURRENT_SOURCE_DIR}/src/state_source_manager/state_source_manager.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/state_adapter/state_adapter.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flight_supervisor/flight_supervisor_node.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flight_supervisor/px4_ev_observer.py
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/flight_supervisor/yaw_diagnostics.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/control_backend/px4_backend.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/mission_executor/mission_executor_node.py
   ${CMAKE_CURRENT_SOURCE_DIR}/test/mock_state_source.py

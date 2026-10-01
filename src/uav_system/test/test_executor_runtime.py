@@ -4,16 +4,15 @@ import threading
 import types
 import unittest
 from unittest.mock import patch
-import yaml
-from support import ROOT, takeoff_task
+from support import ROOT, executor_config, load_fixture_task, takeoff_task
 from mission_executor.execution import ExecutionController as Mission
 
 
 class ExecutorRuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.cfg=yaml.safe_load((ROOT/'config/mission_executor.yaml').read_text())
+        self.cfg=executor_config()
         self.cfg['auto_arm']=True
-        self.m=Mission(self.cfg, takeoff_task(self.cfg)); self.m.session='s'; self.m.preparation_mode='OFFBOARD'
+        self.m=Mission(self.cfg, takeoff_task()); self.m.session='s'; self.m.preparation_mode='OFFBOARD'
         self.m.hold=(0,0,0,0);self.m.target=self.m.hold
         self.clock=0.;self.tick=None;self.commands=[];self.attitudes=[];self.states=[];self.threads=[];self.callbacks={};self.service_calls=[]
         ns=types.SimpleNamespace
@@ -61,7 +60,7 @@ class ExecutorRuntimeTests(unittest.TestCase):
         self.module=importlib.util.module_from_spec(spec)
         with patch.dict('sys.modules',modules):spec.loader.exec_module(self.module)
         self.module.ExecutionController=lambda cfg,task:self.m
-        self.module.run(self.cfg, takeoff_task(self.cfg))
+        self.module.run(self.cfg, takeoff_task())
         clock=patch.object(self.module.time,'monotonic',lambda:self.clock);clock.start();self.addCleanup(clock.stop)
         worker=patch.object(self.module.threading,'Thread',lambda **kwargs:ns(start=lambda:self.threads.append(kwargs)))
         worker.start();self.addCleanup(worker.stop)
@@ -212,8 +211,7 @@ class ExecutorRuntimeTests(unittest.TestCase):
         self.assertEqual(self.service_calls,[])
 
     def test_attitude_task_uses_one_stream_with_zero_thrust_before_arm(self):
-        from mission_executor.mission_loader import load_task
-        loaded=load_task(ROOT,'rig_attitude_hold')
+        loaded=load_fixture_task('rig_attitude_hold')
         self.m.task=loaded.task;self.m.command_kind='attitude'
         self.m.enter('PRESTREAM',0);self.data['fcu'].armed=False
         self.tick()

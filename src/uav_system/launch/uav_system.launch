@@ -8,8 +8,6 @@
   <arg name="simulation_transport" default="false" />
   <arg name="fcu_url" default="/dev/ttyACM0:57600" />
   <arg name="gcs_url" default="" />
-  <!-- Optional read-only yaw recorder; empty path disables it. -->
-  <arg name="yaw_diagnostics_file" default="" />
   <arg name="start_mission_executor" default="false" />
   <arg name="mission_source" default="propellerless_motor_check" />
   <arg name="mission_config" default="" />
@@ -39,10 +37,6 @@
     <rosparam command="load" file="$(find uav_system)/config/flight_supervisor.yaml" />
     <param name="backend_output_enabled" value="$(eval arg('output_enabled') and arg('state_source') != 'mock')" />
     <param name="simulation_transport" value="$(arg simulation_transport)" />
-  </node>
-  <node if="$(eval arg('yaw_diagnostics_file') != '')" pkg="uav_system" type="yaw_diagnostics.py" name="yaw_diagnostics" output="screen">
-    <param name="output_file" value="$(arg yaw_diagnostics_file)" />
-    <param name="rate_hz" value="10.0" />
   </node>
   <include if="$(arg start_mission_executor)" file="$(find uav_system)/launch/mission_executor.launch">
     <arg name="mission_source" value="$(arg mission_source)" />

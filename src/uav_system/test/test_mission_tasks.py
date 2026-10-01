@@ -1,10 +1,11 @@
 """Task selection and common flight gates, without any ROS/FCU services."""
 import tempfile
 import unittest
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import yaml
-from support import ROOT
+from support import ROOT, FIXTURES, executor_config, load_fixture_task
 from mission_executor.mission_loader import ExecutorLock, load_task
 from mission_executor.execution import ExecutionController as Mission
 from mission_executor.execution import TaskUpdate
@@ -13,6 +14,47 @@ from mission_executor.execution import TaskUpdate
 class TaskTests(unittest.TestCase):
     def setUp(self):
         self.motor_config = yaml.safe_load((ROOT / "config/mission/propellerless_motor_check.yaml").read_text())
+
+    def test_behavior_fixtures_never_read_live_configuration(self):
+        from mission_executor import mission_loader
+        read = mission_loader.read_config
+        live = (ROOT / 'config').resolve()
+
+        def fixture_only(path):
+            self.assertNotIn(live, path.resolve().parents)
+            return read(path)
+
+        with patch.object(mission_loader, 'read_config', side_effect=fixture_only):
+            for source in ('takeoff_hover_land', 'rig_attitude_hold'):
+                loaded = load_fixture_task(source)
+                self.assertEqual(loaded.mission_config_path.parent, FIXTURES.resolve())
+                self.assertEqual(loaded.executor_config_path.parent, FIXTURES.resolve())
+        read_text = Path.read_text
+
+        def fixed_executor_only(path, *args, **kwargs):
+            self.assertEqual(path.resolve(),
+                             (FIXTURES / 'mission_executor.yaml').resolve())
+            return read_text(path, *args, **kwargs)
+
+        with patch.object(Path, 'read_text', autospec=True,
+                          side_effect=fixed_executor_only):
+            first = executor_config()
+            first['auto_arm'] = False
+            self.assertTrue(executor_config()['auto_arm'])
+
+    def test_live_task_configs_load_without_fixed_tuning_values(self):
+        for source in ('takeoff_hover_land', 'rig_attitude_hold',
+                       'propellerless_motor_check'):
+            with self.subTest(source=source):
+                loaded = load_task(ROOT, source)
+                expected = yaml.safe_load((ROOT / 'config/mission' /
+                                          (source + '.yaml')).read_text())
+                self.assertEqual(loaded.mission_config, expected)
+                self.assertEqual(loaded.mission_config_path.parent,
+                                 (ROOT / 'config/mission').resolve())
+                origin = (1., 2., 3., .4)
+                self.assertIsInstance(loaded.task.start(0., origin), TaskUpdate)
+                self.assertIsInstance(loaded.task.step(.1, origin), TaskUpdate)
 
     def test_default_is_propellerless_and_takeoff_requires_selection(self):
         loaded = load_task(ROOT)

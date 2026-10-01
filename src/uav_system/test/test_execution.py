@@ -1,18 +1,16 @@
 import unittest
-import yaml
-from support import ROOT
 from mission_executor.execution import ExecutionController as MissionController
 from mission_executor.mission_loader import normalize_config
 
-from support import takeoff_task
+from support import executor_config, takeoff_task
 
 def Mission(cfg):
-    return MissionController(cfg, takeoff_task(cfg))
+    return MissionController(cfg, takeoff_task())
 
 
 class MissionTests(unittest.TestCase):
     def setUp(self):
-        self.cfg=yaml.safe_load((ROOT/'config/mission_executor.yaml').read_text())
+        self.cfg=executor_config()
         self.cfg['auto_arm']=True
         self.m=Mission(self.cfg);self.fcu=(True,False,'POSCTL');self.local=(0,0,0,0)
     def step(self,t,ready=True,session='s',landed=1,result=None,pending=False,confirmed=True):

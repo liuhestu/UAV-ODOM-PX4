@@ -28,6 +28,17 @@ bash scripts/run_checks.sh
 Jetson/Ubuntu 22.04 的 Noetic 安装、OpenCV/cv_bridge ABI 和 Ceres 版本需沿用本机可用环境，禁止用 Humble 环境编译这些节点。
 先修复 build/launch/import 差异，把结果写到 `docs/VALIDATION.md`，不把静态测试当作 ROS 构建通过。
 
+当前 Jetson 的只读运行环境需要已有 RealSense 工作区和 `/usr/local/lib`（log4cxx 兼容库）；本项目 overlay 最后 source，避免运行旧 OpenVINS 可执行文件：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/jetson/jin_ws/uav_ws/devel/setup.bash
+source /home/jetson/uav_odom_px4/devel/setup.bash
+export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+```
+
+这是当前机器的环境记录，不是通用 Noetic 安装方案。在线 pip 未成功时，本轮测试使用现有 `px4_exp/.venv` 中的 pymavlink，详见验证记录。
+
 ## 2. 无硬件软件门
 
 ```bash
@@ -60,6 +71,7 @@ OpenVINS 初始化等待输出后，平移/旋转设备，确认位置、姿态�
 
 填 source YAML 的 `T_SB`（base_link 在 sensor 中）和 `T_AW`（world→Z-up canonical），标定验证通过后才将 calibrated/verified 改为 true。
 如果自己已有外部 RealSense driver，可设 source launch 的 `start_camera: false` 并相应移除 owned_nodes 中的相机项；不要重复占用。
+如果 RealSense 和 OpenVINS 都已在外部运行，复用 `openvins.yaml`，传 `start_source:=false`：manager 只监测输入心跳，不启动或接管外部源节点；外部源退出由数据超时检测。保持 `start_mavros:=false output_enabled:=false` 做只读诊断。
 NOKOV 模板需真实 ROS Odometry 发布者；SDK毫米、左/右手系、速度 frame 不会在本模板中猜测或自动纠正。
 
 ## 4. PX4 遥测与融合门（获硬件验证授权后，不启动 Commander）

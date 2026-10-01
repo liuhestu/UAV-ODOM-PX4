@@ -2,6 +2,7 @@
   <arg name="state_source" default="openvins" />
   <arg name="source_config" default="$(find uav_system)/config/state_sources/$(arg state_source).yaml" />
   <arg name="start_mavros" default="true" />
+  <arg name="start_source" default="true" />
   <arg name="start_ev_observer" default="true" />
   <arg name="output_enabled" default="true" />
   <arg name="simulation_transport" default="false" />
@@ -14,6 +15,7 @@
   </include>
   <node pkg="uav_system" type="state_source_manager.py" name="state_source_manager" output="screen" required="true">
     <param name="source_config" value="$(arg source_config)" />
+    <param name="start_source" value="$(arg start_source)" />
   </node>
   <node pkg="uav_system" type="state_adapter.py" name="state_adapter" output="screen" required="true">
     <param name="source_config" value="$(arg source_config)" />

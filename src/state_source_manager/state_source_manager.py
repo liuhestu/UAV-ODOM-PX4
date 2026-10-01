@@ -28,6 +28,7 @@ def main():
     fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     rospy.init_node('state_source_manager')
     cfg = load_source(rospy.get_param('~source_config'))
+    start_source = rospy.get_param('~start_source', True)
     pub = rospy.Publisher('/uav/source/status', SourceStatus, queue_size=1)
     session = str(uuid.uuid4())
     listener = DeathListener()
@@ -37,12 +38,14 @@ def main():
         with mutex:
             last_raw[0] = (time.monotonic(), msg.header.stamp)
     rospy.Subscriber(cfg['input']['topic'], Odometry, received, queue_size=1)
-    existing = set(rosnode.get_node_names())
-    conflicts = existing.intersection(cfg['source'].get('owned_nodes', []))
-    if conflicts:
-        raise RuntimeError('source nodes already running: '+str(sorted(conflicts)))
+    if start_source:
+        existing = set(rosnode.get_node_names())
+        conflicts = existing.intersection(cfg['source'].get('owned_nodes', []))
+        if conflicts:
+            raise RuntimeError('source nodes already running: '+str(sorted(conflicts)))
     launch_files = []
-    for item in cfg['source']['launches']:
+    launches = cfg['source']['launches'] if start_source else []
+    for item in launches:
         args = [str(k)+':='+str(v).lower() if isinstance(v, bool) else str(k)+':='+str(v)
                 for k, v in item.get('args', {}).items()]
         filename = roslaunch.rlutil.resolve_launch_arguments([item['package'], item['file']])[0]

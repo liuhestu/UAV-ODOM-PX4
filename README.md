@@ -104,6 +104,7 @@ OpenVINS/NOKOV 配置里的单位外参和世界轴对齐默认**未验证**，�
 `state_source:=openvins` 选择 `config/state_sources/openvins.yaml`。
 YAML 中定义 launch package/file/args、输入话题/语义、`T_SB` 外参和 `T_AW` 世界对齐。
 它不执行 YAML shell 字符串。新增 Odometry 源通常只需要新增一份 YAML。
+已有外部 RealSense/OpenVINS 时可传 `start_source:=false` 复用同一配置，仅监测输入，不管理外部源进程。已有 MAVROS 时同时传 `start_mavros:=false`。
 
 `nokov.yaml` 是外部 ROS Odometry 发布者的接入模板，不包含 NOKOV 私有 SDK。
 输入必须是米、秒、rad；填入真实话题、坐标系及速度语义。特殊消息先通过源侧 converter 转成 Odometry。

@@ -33,6 +33,7 @@ catkin_install_python(PROGRAMS
   ${CMAKE_CURRENT_SOURCE_DIR}/src/state_adapter/state_adapter.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flight_supervisor/flight_supervisor_node.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flight_supervisor/px4_ev_observer.py
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/flight_supervisor/yaw_diagnostics.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/control_backend/px4_backend.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/mission_executor/mission_executor_node.py
   ${CMAKE_CURRENT_SOURCE_DIR}/test/mock_state_source.py

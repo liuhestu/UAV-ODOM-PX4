@@ -258,3 +258,72 @@ Jetson 构建目录曾包含时间戳晚于当前系统时间的产物，造成 
 本次仅整理代码与记录，未重新启动相机、MAVROS、基础系统或任务。两个 Python 节点语法检查通过；静态检查确认完整 snapshot 只使用 DEBUG，健康报告根据 ready/arm_ready 选择 INFO/WARN。受影响的 ov_init 两个 C++ 对象与共享库已删除后重新编译，ov_core/ov_init 两包构建成功；产物检查确认简短窗口日志存在，临时 `[init-imu]`、`[init-trim]` 日志已移除。Git 空白检查通过，没有新增或运行单元测试，保留已有启动缓冲与融合证据回归用例。本轮新增的两份独立排查文档已归并到本节并删除。
 
 构建证据：Jetson `/tmp/uav_diagnostic_cleanup_build.log`。基础系统下一次启动会加载精简后的节点和库；上面的三轮源启动及 45 秒基础系统观察均为精简前记录。
+
+## OpenVINS 协方差修复与航向异常记录（2026-10-07）
+
+### 问题原因
+
+修复前的带桨任务实际升高约 0.3 m 后保护降落。Adapter 首先在坐标变换前拒收 OpenVINS 原始协方差：pose/twist 最大非对称约 1.04e-6 / 3.98e-6，超过 1e-6 阈值，随后健康状态丢失。当前变换雅可比的有限差分误差约 2.51e-12 / 7.35e-13，1172 条匹配协方差回放误差为 0，未发现 Adapter 变换公式错误。原始矩阵归一化非对称差最高约 7.34%，不能视为普通 double 舍入尾差。
+
+OpenVINS 相机线程更新共享 EKF 状态，IMU 线程同时复制传播缓存。受控实验直接调用实际库，在 EKF 更新上三角、恢复下三角之间暂时停顿：中间矩阵与缓存复制的非对称差均为 0.0735711，fast propagation 输出差为 0.0281118；完整更新后的差为 0，最小特征值为 0.0009091。这验证了未同步读取能够把部分更新矩阵带到输出。实验使用合成状态并控制读取时机；静止地面诊断没有自然复现超限，历史 bag 也没有内部状态，因此不能逐条确认旧异常的内部读取时刻。
+
+修复前证据：`flight_logs/yaw_run_QCGPYt/round2/` 中的 `analysis.json`、`adapter_math_check.json`、`flight_trace_0.bag`、`px4.ulg`。该轮 PX4 1.17.0 ULog 未记录航向重置，不能把它与后续重置混为同一事件。
+
+### 解决方法
+
+相机更新完整结束后发布不可变状态快照，包含同代时间、IMU 均值、15×15 协方差、时间偏移、IMU 标定和最老 clone 时间。高频传播使用快照，快照交换与传播缓存分别加短锁，缓存按快照身份刷新。普通相机、ZUPT、模拟和 groundtruth 初始化路径均接入；传播公式和启动 IMU 缓冲保持原行为。
+
+相机后台线程按值捕获 IMU 时间，消除对回调局部变量的引用；跨线程就绪和移动状态使用 atomic。Adapter 的非对称阈值、非有限与非半正定检查保留。生产源码中的测试停顿、逐帧矩阵日志和诊断开关已移除；本次整理删除两个临时快照测试文件及其运行说明，已完成的测试结果仍保存在证据目录。
+
+### 验证结果
+
+以下均为修复完成后、此次代码与文档整理前取得的结果。证据根目录为 `flight_logs/covariance_fix_zxBkdL/`。
+
+| 检查 | 结果 | 证据文件 |
+| --- | --- | --- |
+| 受控并发机制复现 | 完整更新正常；读取中间矩阵使缓存与输出不对称 | `controlled_partial_summary.json` |
+| 传播数学一致性 | 默认与非默认标定各 150 组，旧、新均值及协方差最大差均为 0 | `math_comparison.json`、`math_calibrated_comparison.json` |
+| 并发快照检查 | 1 写线程、4 读线程；6000 次一致性检查、5999 次成功传播，失败 0；旧快照不变，未发布修改不可见 | `snapshot_regression.log` |
+| Adapter 保护 | NaN、无穷、负方差、非半正定、不对称超限均拒收，合法矩阵通过 | `check_adapter_protections.json` |
+| 修复后地面回放 | 8694 条 raw 无拒收；8687 条匹配 canonical 的协方差回放误差 0 | `fixed_adapter_replay.json`、`fixed_ground.bag` |
+| 完整基础链 | 就绪后观察 65.85 秒，无 ready/arm_ready 丢失；采样的 EV received/fused/reset_valid 均通过，armed 始终 false | `fixed_full_system_summary.json` |
+
+删除受影响对象后 `ov_msckf` 构建成功，并以进程加载路径和库符号确认新代码实际运行；构建记录与摘要为 `snapshot_fix_build.log`、`fixed_build_manifest.sha256`。ROS1 已构建运行，ROS2 的时间捕获修正未在本机编译；并发检查覆盖目标路径，未运行 ThreadSanitizer。
+
+编译结束后的两轮静止地面对比，采用相同基础链配置、稳定采样段各约 41 秒：
+
+| 指标 | 旧库 | 修复库 |
+| --- | --- | --- |
+| raw 接收频率 | 200.353 Hz | 200.331 Hz |
+| raw stamp 年龄中位数 / p99 | 15.338 / 44.982 ms | 15.567 / 44.897 ms |
+| canonical 接收频率 | 200.325 Hz | 200.191 Hz |
+| canonical stamp 年龄中位数 / p99 | 17.433 / 46.936 ms | 17.600 / 47.076 ms |
+
+未观察到明显性能退化。接收间隔 p99 两轮均约 45 ms，平均 200 Hz 包含突发到达；stamp 年龄包含传感器时间与消息链路，不等同于计算耗时。统计见 `baseline_idle_summary.json`、`fixed_ground_summary.json`。
+
+#### 带桨验收
+
+用户确认就位并授权一次任务后，实际升高约 0.5 m，飞行与降落平稳。TAKEOFF 为 ROS 1790877087.717248，HOVER 为 1790877096.625715；1790877097.491004 开始保护降落，1790877100.839056 确认落地。
+
+TAKEOFF 至 ABORTED 窗口共 2629 条原始 odom，最大非对称为 3.2526065e-19，超限和非有限数均为 0，最小对称部分特征值为 4.5572685e-6；261 条 Adapter health 全部通过。退出原因仅为 PX4 估计器重置：heading reset counter 1→2，delta_heading=0.04087 rad（约 2.34°），其余记录的重置计数不变，退出时 EV 位置/高度融合仍通过。
+
+按用户验收条件“实际带桨 Mission 不因协方差异常退出，允许其他原因失败”，协方差修复验收通过；任务最终仍为 MISSION FAILED，悬停约 0.87 秒。末条遥测为 armed=false、ON_GROUND，验收轮全部节点已停止，无自动重试，未写 PX4 参数或刷固件。
+
+证据位于 `flight_acceptance.kbhjhR/`，包括 `acceptance_analysis.json`、`flight_trace.bag`、`mission.log`、`system.log`、`yaw.jsonl`。任务时间线来自实际 mission.log；bag 未收到 `/uav/mission/status`，不能把缺失话题当作已记录。该轮未下载新的 PX4 ULog，重置结论来自 Observer 实读计数和系统故障日志。
+
+### 待排查问题：PX4 航向重置
+
+用户随后自行运行一轮：ROS 1790878328.433852～1790878328.500528，PX4 local yaw 从 1.979759 跳到 1.200158 rad，约 44.7°。基础系统在 1790878328.925773 报告 heading_reset_counter=3、delta_heading=0.77951 rad；源、Adapter、canonical、EV 发布与融合均 PASS，唯一故障为 PX4 estimator reset。随后任务保护降落。证据为 Jetson `~/.ros/log/8ad0e338-bdc3-11f1-b202-f9058410b324/rosout.log` 和对应节点日志。
+
+该轮退出由航向重置触发，不能据此认为协方差修复失效。日志中的估计航向跳变不等同于实际机体转动；重置的触发机制和历史 yaw 突转仍待 PX4 ULog 排查。对这轮的判断来自健康检查日志，没有完整原始协方差 bag 的逐条统计。
+
+保留只读 `/uav/px4/observer_snapshot` 和可选 `yaw_diagnostics.py` 用于后续排查。通过 `uav_system.launch` 的 `yaw_diagnostics_file` 指定新文件启用，默认关闭：
+
+```bash
+roslaunch uav_system uav_system.launch state_source:=openvins \
+  yaw_diagnostics_file:=/tmp/yaw_run_next.jsonl
+```
+
+JSONL 以 10 Hz 保存各话题最新值、原始 stamp 和接收年龄，缺失话题不伪造数据，文件独占创建。Observer 各项查询为顺序采样；10 Hz 重复状态不证明原生遥测连续性，精确时序应结合 ROS bag 与 PX4 ULog。上述基础启动命令不包含 Mission。
+
+此次整理只删除临时测试、精简注释和文档，静态检查删除项引用、诊断标记及补丁空白；未新增或运行测试，未构建、启动硬件或执行任务。`flight_logs/` 的原始记录及归档证据保留，构建摘要对应此前验证的版本。

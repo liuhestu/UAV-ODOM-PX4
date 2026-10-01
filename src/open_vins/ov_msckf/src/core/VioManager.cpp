@@ -147,6 +147,7 @@ VioManager::VioManager(VioManagerOptions &params_) : thread_init_running(false),
 
   // Initialize our state propagator
   propagator = std::make_shared<Propagator>(params.imu_noises, params.gravity_mag);
+  propagator->publish_state_snapshot(state);
 
   // Our state initialize
   initializer = std::make_shared<ov_init::InertialInitializer>(params.init_options, trackFEATS->get_feature_database());
@@ -180,12 +181,13 @@ void VioManager::feed_measurement_imu(const ov_core::ImuData &message) {
 
   // The oldest time we need IMU with is the last clone
   // We shouldn't really need the whole window, but if we go backwards in time we will
-  double oldest_time = state->margtimestep();
-  if (oldest_time > state->_timestamp) {
+  const auto completed = propagator->get_state_snapshot();
+  double oldest_time = completed->oldest_clone;
+  if (oldest_time > completed->timestamp) {
     oldest_time = -1;
   }
   if (!is_initialized_vio) {
-    oldest_time = message.timestamp - params.init_options.init_window_time + state->_calib_dt_CAMtoIMU->value()(0) - 0.10;
+    oldest_time = message.timestamp - params.init_options.init_window_time + completed->time_offset - 0.10;
   }
   propagator->feed_imu(message, oldest_time);
 
@@ -244,6 +246,7 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
       // A successful stationary update is a completed filter update too.
       // Otherwise initialized() stays false until the first feature update.
       timelastupdate = timestamp;
+      propagator->publish_state_snapshot(state);
       return;
     }
   }
@@ -267,6 +270,12 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
     message.masks.push_back(cv::Mat::zeros(cv::Size(width, height), CV_8UC1));
   }
   do_feature_propagate_update(message);
+  propagator->publish_state_snapshot(state);
+}
+
+void VioManager::feed_measurement_camera(const ov_core::CameraData &message) {
+  track_image_and_update(message);
+  if (is_initialized_vio) propagator->publish_state_snapshot(state);
 }
 
 void VioManager::track_image_and_update(const ov_core::CameraData &message_const) {

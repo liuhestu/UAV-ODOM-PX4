@@ -11,6 +11,7 @@ import re
 import threading
 import time
 import rospy
+from std_msgs.msg import String
 from mavros_msgs.msg import Mavlink, State
 from mavros_msgs.srv import ParamGet, ParamPull
 from uav_system.msg import SourceStatus, EvStatus
@@ -37,6 +38,7 @@ def main():
     box.subscribe('/uav/source/status',SourceStatus,'source'); box.subscribe('/mavros/state',State,'fcu')
     to=rospy.Publisher('/mavlink/to',Mavlink,queue_size=10)
     pub=rospy.Publisher('/uav/px4/ev_status',EvStatus,queue_size=1)
+    diagnostics=rospy.Publisher('/uav/px4/observer_snapshot',String,queue_size=5)
     cv=threading.Condition(); received={'text':''}
     def serial(msg):
         if msg.framing_status!=Mavlink.FRAMING_OK or msg.msgid!=126 or msg.sysid!=p['target_system_id'] or msg.compid!=p['target_component_id']: return
@@ -102,6 +104,8 @@ def main():
     while not rospy.is_shutdown():
         start=time.monotonic(); msg=EvStatus(); msg.header.stamp=rospy.Time.now()
         samples={}
+        query_intervals={}
+        observation_started=rospy.Time.now().to_sec()
         try:
             with box.lock:
                 source=box.get('source',p['source_timeout']); fcu=box.get('fcu',p['source_timeout'])
@@ -111,7 +115,10 @@ def main():
             if not source or not source.healthy: raise ValueError('source/FCU unavailable')
             if to.get_num_connections()==0: raise ValueError('MAVROS raw MAVLink bridge unavailable')
             verify_single_ekf()
-            samples={topic:query(topic) for topic in TOPICS}
+            for topic in TOPICS:
+                before=rospy.Time.now().to_sec()
+                samples[topic]=query(topic)
+                query_intervals[topic]=[before,rospy.Time.now().to_sec()]
             # Timestamp represents completion of the observation, not poll start.
             msg.header.stamp=rospy.Time.now(); msg.source_session_id=source.session_id
             msg.received,msg.fused,msg.reset_counter,failures=inspect_listener(samples,p['max_px4_age'])
@@ -136,6 +143,12 @@ def main():
             if samples:
                 rospy.logdebug('PX4 EV observation snapshot: %s',json.dumps(samples,sort_keys=True))
             previous=snapshot
+        # Diagnostic transport only; no subscriber or file I/O in the control path.
+        diagnostics.publish(String(data=json.dumps(dict(
+            ros_start=observation_started,ros_end=rospy.Time.now().to_sec(),
+            monotonic_end=time.monotonic(),query_intervals=query_intervals,
+            received=msg.received,fused=msg.fused,reset_valid=msg.reset_valid,
+            detail=msg.detail,samples=samples),sort_keys=True)))
         pub.publish(msg)
         time.sleep(max(0.01,p['poll_seconds']-(time.monotonic()-start)))
 

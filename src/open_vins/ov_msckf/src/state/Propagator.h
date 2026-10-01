@@ -95,6 +95,18 @@ public:
    */
   void invalidate_cache() { cache_imu_valid = false; }
 
+  // Publish only on the state writer thread after a complete update.
+  // Readers retain immutable snapshots while the live EKF continues updating.
+  struct StateSnapshot {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    double timestamp, time_offset, oldest_clone;
+    Eigen::Matrix<double, 16, 1> mean;
+    Eigen::Matrix<double, 15, 15> covariance;
+    Eigen::Matrix3d Dw, Da, Tg, R_ACCtoIMU, R_GYROtoIMU;
+  };
+  void publish_state_snapshot(const std::shared_ptr<State> &state);
+  std::shared_ptr<const StateSnapshot> get_state_snapshot();
+
   /**
    * @brief Propagate state up to given timestamp and then clone
    *
@@ -444,6 +456,9 @@ protected:
   // Estimate for time offset at last propagation time
   double last_prop_time_offset = 0.0;
   bool have_last_prop_time_offset = false;
+
+  std::mutex snapshot_mtx, fast_propagation_mtx;
+  std::shared_ptr<const StateSnapshot> completed_snapshot, cache_snapshot;
 
   // Cache of the last fast propagated state
   std::atomic<bool> cache_imu_valid;

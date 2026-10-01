@@ -27,7 +27,7 @@ extrinsic:
   translation_xyz:
   - 0.0
   - 0.0
-  - 0.0
+  - -0.1
   rotation_xyzw:
   # T_SB for optical IMU axes (right, down, forward) and a camera mounted
   # forward-facing/upright: base_link axes are forward, left, up.

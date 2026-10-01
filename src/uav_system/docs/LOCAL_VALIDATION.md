@@ -327,3 +327,73 @@ roslaunch uav_system uav_system.launch state_source:=openvins \
 JSONL 以 10 Hz 保存各话题最新值、原始 stamp 和接收年龄，缺失话题不伪造数据，文件独占创建。Observer 各项查询为顺序采样；10 Hz 重复状态不证明原生遥测连续性，精确时序应结合 ROS bag 与 PX4 ULog。上述基础启动命令不包含 Mission。
 
 此次整理只删除临时测试、精简注释和文档，静态检查删除项引用、诊断标记及补丁空白；未新增或运行测试，未构建、启动硬件或执行任务。`flight_logs/` 的原始记录及归档证据保留，构建摘要对应此前验证的版本。
+
+
+## PX4 航向重置 ULog 排查（2026-10-07，修复验证进行中）
+
+### 日志匹配与触发证据
+
+指定下载日志 ID 348（726788 字节）和 349（725565 字节），两者均完整、无记录的 dropout，固件 hash 均为 `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`。原生解锁/离地/重置/降落顺序、重置量和时长分别对应此前约 2.34° 与约 44.7° 的两轮任务，不依赖“最新日志”或 Jetson 日历时间判定。ID 347 的大小与已有协方差失败轮 ULog 一致，作为关联对照。
+
+两轮 reset 分别在 PX4 boot time 4134.821584 / 5366.585259 秒，delta_heading 为 0.0408703 / 0.7795172 rad。重置前最近记录的磁融合成功时间分别为 4127.570777 / 5359.364396 秒；差约 7.25 / 7.22 秒，包含 EKF 延迟及日志采样差。磁力计 Y 轴 test_ratio 约 3.19 / 3.16（超过 1），创新被拒绝；EV position/height 仍融合，EV yaw 未融合，GNSS position/velocity 与 auxiliary global position 均未启用。重置附近 mag_aligned_in_flight 变为 true，随后由 mag heading 切换到 mag 3D。
+
+匹配固件源码中 `reset_timeout_max=7000000 us`；磁融合超时且无 North/East 辅助时调用磁状态与航向重置。该固件 `isNorthEastAidingActive()` 仅包含 GNSS position、GNSS velocity、auxiliary global position，不包含 EV position。因此 EV 位置融合正常，并不能阻止此磁融合超时重置分支。两轮 ULog 与该分支条件和时序一致。尚未确定磁创新拒绝来自物理磁干扰、标定、初始航向/磁场估计还是其他输入问题，不能把它直接写成磁力计硬件故障。
+
+本轮没有新增飞行。只读地面基础链 ready 持续约 52.42 秒，canonical yaw 变化范围 0.000480 rad，yaw 方差约 0.000404～0.000431，armed 始终 false。VIO canonical yaw 接近 0，PX4 ROS yaw 约 2.428 rad；VIO 使用启动时局部航向基准，不能把两者的常量偏差直接视为视觉错误，启用 EV yaw 时需在地面完成新航向参考对齐。
+
+### 下一项修改候选与授权边界
+
+实读当前 `EKF2_EV_CTRL=3`、`EKF2_MAG_TYPE=0`、`EKF2_HGT_REF=1`、`EKF2_EV_NOISE_MD=0`。拟单项将 `EKF2_EV_CTRL` 从 3 改为 11，保留位置/高度融合并启用 bit 3 的 EV yaw；其余参数和重置保护不变，回滚值为 3。先取得明确参数授权，再以未解锁地面数据验证 EV yaw 融合、地面对齐、稳定性与保护行为；通过后另行取得当轮带桨授权。该候选已按用户授权实施，地面结果见下节；带桨验证仍待当轮授权。
+
+源码依据为 PX4 官方上述 commit 的 `mag_control.cpp`、`common.h`、`estimator_interface.cpp` 和 `params_external_vision.yaml`；本地 firmware 源码 HEAD 不同，未用其版本替代实际固件。证据目录：`flight_logs/yaw_reset.GGa7lz/`，含两份 `.ulg`、下载记录、`reset_comparison.json`、`ground_and_parameter_baseline.json` 和地面 JSONL。该轮未写 PX4 参数、修改保护或请求 ARM。
+
+
+### 授权启用 EV yaw 后的地面验证
+
+用户明确授权参数修改与地面验证后，先确认 connected=true、armed=false，将 `EKF2_EV_CTRL` 从 3 改为 11，ParamSet 成功且 ParamGet 读回为 11。`EKF2_MAG_TYPE=0`、`EKF2_HGT_REF=1`、`EKF2_EV_NOISE_MD=0` 保持原值；回滚值为 `EKF2_EV_CTRL=3`。参数仍保留 11，不自动回滚。
+
+先观察视觉航向地面对齐，再启用 Observer：有效观察 61.84 秒，EV yaw/position/height 融合均启用，reject_yaw=false、cs_ev_yaw_fault=false，heading reset counter 保持 5，PX4 与 canonical yaw 最大差 0.002124 rad（约 0.122°），系统 ready/arm_ready 持续通过。随后完全停止该轮节点，用正常 `uav_system.launch state_source:=openvins` 启动方式复查：就绪后观察 60.94 秒，609 条诊断采样均 EV yaw active，重置计数保持 7，无就绪丢失，最大 yaw 差 0.000746 rad（约 0.043°）。地面对齐阶段发生的重置与稳定观察期区分，不将绝对计数增长当成空中故障；正常启动未触发重置故障锁存。
+
+两轮 armed 始终 false，没有启动 Mission。第一轮 bag 中 18330 条 raw 和 8859 条 canonical 的 pose/twist 协方差最大非对称为 1.0842e-18，非有限数为 0。启动初期有 waiting for odometry/stale 报告，不能把它们计为稳定期拒收；未出现协方差超限。停止尾部的 Observer listener timeout 与遥测过期不计入稳定观察窗口。
+
+这只证明本机地面对齐、EV yaw 融合、就绪与稳定性通过，尚未验证带桨起飞时不再出现重置或实际转向；最终完整任务验收仍未完成。现有重置即保护降落逻辑未修改，未新增生产代码或关闭检查；所有本轮节点与记录器已停止。
+
+证据目录：`flight_logs/yaw_reset.GGa7lz/ev_yaw_ground.GrRan9/`，含 `parameter_change.json`、`ground_alignment_summary.json`、`standard_startup_summary.json`、`ground_covariance_summary.json`、两轮 JSONL/启动日志和 `ground_trace.bag`。参数记录保留原值、新值与读回结果。
+
+
+### EV yaw 带桨任务完成，但发现实际高度验收缺口
+
+用户确认就位并明确授权一次带桨任务后，正式配置仍为 height=0.6 m、hover_seconds=15。TAKEOFF 为 ROS 1790883383.765636，HOVER 为 1790883393.139012，WAIT_LAND_MODE 为 1790883408.171689，DONE 为 1790883412.748101；悬停阶段持续 15.033 秒，日志为 MISSION SUCCESSFUL。落地与解除武装均确认，无自动重试。
+
+本轮 bag 的 29 次 Observer 快照均 EV yaw active，heading reset counter 始终为 9，系统就绪未丢失、Adapter 无 unhealthy；5773 条任务窗口 raw 协方差最大非对称 7.59e-19、无非有限元素。指定下载 ID 350（1196879 字节）并匹配本轮原生任务事件，ULog 时长 30.805 秒，无记录的 dropout，固件 hash 与前两轮相同。原生 heading reset counter 9、z reset counter 1 均未变。该轮没有复现先前磁融合超时导致的 yaw reset；它不证明所有后续飞行都不会重置。
+
+用户飞行中反馈“感觉有 1 m 多”。按起飞时刻基准比较，任务目标增量为 0.6 m，PX4 ROS odom 最大增量 0.6184 m，canonical VIO 最大增量 1.2024 m，raw VIO 为 1.2056 m；因此不能把任务日志 SUCCESSFUL 当作真实 0.6 m 高度验收通过。用户反馈为目测，尚无独立尺量；VIO 的米制尺度也未在本轮独立验证。
+
+原生 ULog 确认 `EKF2_EV_CTRL=11`、`EKF2_HGT_REF=1`、baro 与 EV height 同时融合且未记录高度创新拒绝。EV 高度偏置从 -5.01056 m 变为 -5.75887 m，变化范围 0.74831 m；EV height aid observation 是经过偏置修正的量，不能当作原始视觉高度。匹配固件参数定义中 HGT_REF 的 1 为 GPS、3 为 Vision，且标记 reboot_required=true；非视觉参考路径会初始化并估计 EV 高度偏置。这些证据指向高度融合/偏置估计，不能简单归因于把 height 配成 1 m 或重复增加了固定坐标偏移。
+
+下一项建议单因素将 `EKF2_HGT_REF` 从 1 改为 3，保持 EV_CTRL=11、气压计配置和保护逻辑不变，回滚值为 1。须先取得参数修改及飞控重启授权，重启后只做地面验证：确认 PX4 与 VIO 的相对高度一致、偏置行为、就绪与 yaw 融合；后续带桨高度验收需独立地面高度标尺和新的当轮授权。此建议尚未实施，不能宣称高度问题已修复。
+
+证据目录：`flight_logs/yaw_reset.GGa7lz/ev_yaw_flight.OF8N8N/`，含 `flight_analysis.json`、`ulog_analysis.json`、`px4_log_350.ulg`、ROS bag/JSONL 与实际任务日志。默认 ULog 未记录 vehicle_visual_odometry 或独立 EV yaw aid topic，原始视觉轨迹采用 ROS bag，不伪造缺失记录。本轮全部后台节点与记录器均已停止；实际高度 0.6 m 的最终验收仍未完成。
+
+
+## EV_CTRL=11、HGT_REF=3 两轮带桨验证（2026-10-07）
+
+用户授权两轮实机 Mission；确认飞控未解锁后将 `EKF2_HGT_REF` 从 1 改为 3，保留 `EKF2_EV_CTRL=11`，两项均读回确认。飞控接受 reboot 请求，重启后参数仍为 11/3，native 时间回到约 96 秒。地面就绪观察约 55.73 秒，PX4 与 canonical 高度最大差 0.00246 m，armed 始终 false。每轮均确认就位和就绪，只启动一次任务；起飞目标仍为相对 0.6 m、悬停 15 秒。
+
+| 项目 | 第一轮 | 第二轮 |
+| --- | --- | --- |
+| Mission 结果 | SUCCESSFUL、DONE、已落地并解除武装 | SUCCESSFUL、DONE、已落地并解除武装 |
+| 悬停时长 | 15.033 s | 15.034 s |
+| PX4 最大相对高度 | 0.652 m | 0.624 m |
+| canonical VIO 最大相对高度 | 0.686 m | 0.645 m |
+| 任务窗口 heading reset counter | 4，未变化 | 10，未变化 |
+| 就绪丢失 / Adapter unhealthy | 0 / 0 | 0 / 0 |
+| raw 最大协方差非对称 | 2.85e-19 | 3.52e-19 |
+
+上述高度为估计轨迹峰值，非独立尺量；两路峰值不必发生在同一瞬间。用户确认第一轮实际高度很接近 0.6 m、飞行平稳、轻微漂移不持续、降落稍快；第二轮反馈“很正确”。按用户要求保留当前参数，未调整控制增益、降落速度或任何保护逻辑；未启动第三轮。
+
+第一轮 ULog ID 351（1122436 字节）完整下载，固件 hash 仍为 d6f12ad1c4f70ad3230afd7d86e971421e02fef4，原生参数确认 11/3；heading reset counter 4 与 z reset counter 3 均不变，EV yaw/height 标志均启用，无 yaw 创新拒绝。该日志有 1 个 dropout，不能宣称原生采样全程无缺口；日志未包含 estimator_ev_pos_bias，不能据缺失话题伪造“偏置为零”的实测。第二轮 ULog ID 352 应为 1170846 字节，下载到 590490 字节时基础链的 300 秒有界运行结束，下载失败，仅保留 `.partial`；它不用于第二轮完整原生日志结论。第二轮结果来自已完成的任务日志、ROS bag、JSONL 和用户反馈。用户要求收尾后，没有重新启动下载或硬件。
+
+第一轮准备会话曾因前一个 ROS master 退出而中断，尚未启动 Mission；保留 preparation_failed 文件后重新建立基础链，不计作额外飞行。第二轮使用独立 master 11349，两个测试记录分目录保存。两轮均未复现此前协方差拒收、空中航向重置或约一倍高度差异；这两轮实测不代表所有工况与视觉失效行为均已验证。
+
+证据目录：`flight_logs/ev_height_tests.L4TGdP/`，含参数修改记录、ground/summary.json、round1/round2 的完整 ROS bag、JSONL、任务/系统日志和 flight_analysis.json；第一轮另有完整 px4_log_351.ulg/ulog_analysis.json，第二轮保留下载失败记录。所有本轮后台节点与记录器已确认停止，PX4 参数维持 `EKF2_EV_CTRL=11`、`EKF2_HGT_REF=3`。

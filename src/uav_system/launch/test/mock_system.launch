@@ -1,6 +1,7 @@
 <launch>
   <include file="$(find uav_system)/launch/system.launch">
     <arg name="state_source" value="mock" /><arg name="start_mavros" value="false" />
+    <arg name="source_config" value="$(find uav_system)/config/test/mock.yaml" />
     <arg name="start_ev_observer" value="false" /><arg name="output_enabled" value="false" />
   </include>
 </launch>

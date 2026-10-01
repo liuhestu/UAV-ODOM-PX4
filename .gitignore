@@ -30,3 +30,6 @@ log/
 devel/
 .catkin_tools/
 logs/
+
+# Previous workspace build products retained during layout migration
+.legacy_catkin/

@@ -4,13 +4,9 @@
 本轮云端只编辑并测试软件，没有连接真实 RealSense/Pixhawk，没有 ARM、模式切换、PX4 参数写入或固件构建/刷写。
 本地后续先完成构建与只读/软件验证，再按用户当时授权决定是否做硬件或飞行操作。
 
-现在自有代码只有一个ROS包uav_system，构建清单在 `src/uav_system/`；五个业务目录仅放代码。
-共享Python代码/状态消息在 `src/support/`，消息类型改为 `uav_system.msg`；根配置使用 `config/state_sources/`。
-OpenVINS/PX4实际源码位于third_party，src/support/open_vins仅为catkin发现链接。
+GitHub 仓库现在就是 catkin 工作区：真实业务包位于 `src/uav_system/`，OpenVINS 位于 `src/open_vins/`。本文件的配置路径相对业务包；构建命令在工作区根目录执行。
 
-如果已经拉取旧版，先保存并检查自己的本地修改，再 `git pull --ff-only`，不要覆盖本地标定。
-已有本地定位配置从config/sources/迁移到config/state_sources/，用户自定义source_config绝对路径也需同步。
-若构建过旧的state_source_manager/state_adapter/flight_supervisor/px4_backend/commander/uav_core/uav_msgs包，保存工作后清理旧构建产物并重新catkin build，避免旧消息类型或可执行入口被ROS继续发现。
+旧布局的 build/devel/logs/.catkin_tools 已保留在工作区 `.legacy_catkin/时间戳/`；不要 source 旧环境。新布局仍使用 uav_system.msg，且不再包含包内配置链接或 OpenVINS 发现链接。mock 配置位于包内 `config/test/mock.yaml`，仅由 mock launch 显式加载；实机配置位于 `config/state_sources/`。
 
 ## 1. 构建门
 
@@ -18,13 +14,13 @@ OpenVINS/PX4实际源码位于third_party，src/support/open_vins仅为catkin发
 git switch refactor/native-px4-ros1
 source /opt/ros/noetic/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
-catkin build
+./scripts/build.sh
 source devel/setup.bash
-python3 -m pip install -r test/requirements.txt
-bash scripts/run_checks.sh
+python3 -m pip install -r src/uav_system/test/requirements.txt
+bash src/uav_system/scripts/run_checks.sh
 ```
 
-检查各本地包和 OpenVINS 的 ROS1 条件依赖。固件位于 `third_party/px4_autopilot`，不在 catkin 的 src 扫描范围内。
+检查各本地包和 OpenVINS 的 ROS1 条件依赖。固件位于 `third_party/px4_autopilot`，位于 uav_system 包内，catkin 不递归扫描已发现的包。
 Jetson/Ubuntu 22.04 的 Noetic 安装、OpenCV/cv_bridge ABI 和 Ceres 版本需沿用本机可用环境，禁止用 Humble 环境编译这些节点。
 先修复 build/launch/import 差异，把结果写到 `docs/VALIDATION.md`，不把静态测试当作 ROS 构建通过。
 
@@ -33,11 +29,11 @@ Jetson/Ubuntu 22.04 的 Noetic 安装、OpenCV/cv_bridge ABI 和 Ceres 版本需
 ```bash
 source /opt/ros/noetic/setup.bash
 source /home/jetson/jin_ws/uav_ws/devel/setup.bash
-source /home/jetson/uav_odom_px4/devel/setup.bash
+source /home/jetson/uav_odom_px4/devel/setup.bash --extend
 export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
 ```
 
-这是当前机器的环境记录，不是通用 Noetic 安装方案。在线 pip 未成功时，本轮测试使用现有 `px4_exp/.venv` 中的 pymavlink，详见验证记录。
+`--extend` 保留外部工作区的 RealSense 包发现路径，同时使本项目新包优先；不带此参数会恢复新工作区构建时的 Noetic underlay。上述环境是当前机器记录，不是通用 Noetic 安装方案。在线 pip 未成功时，本轮测试使用现有 `px4_exp/.venv` 中的 pymavlink，详见验证记录。
 
 ## 2. 无硬件软件门
 

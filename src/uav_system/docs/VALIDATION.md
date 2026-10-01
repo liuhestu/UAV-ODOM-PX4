@@ -87,3 +87,20 @@ config/state_sources替代config/sources。结构测试核对唯一自有包、�
 - AUTOPILOT_VERSION 报告 flight_sw_version=17891583、flight_custom_version=d6f12ad1c4000000，后续应据此核对实机固件，而非以仓库版本代替。
 
 实机诊断日志：Jetson `/tmp/uav_native_readonly.log`、`/tmp/uav_native_external_mode.log`。本轮未启动实机 Commander，没有 ARM/DISARM、模式请求、EV/setpoint 数据发送、PX4 参数写入或固件刷写。只读 observer 使用了固定 SERIAL_CONTROL 查询接口。硬件轴向/外参标定、有效 VIO、PX4 融合和 SITL/飞行门均未通过；应先解决上述阻塞。
+
+
+## 完整 catkin 工作区迁移：2026-10-05
+
+基线 `0aae208`，分支 `refactor/native-px4-ros1`。工作区根目录保留 Git/CI、构建脚本和入口 README；业务包、文档、测试、配置与 PX4 源码归入真实目录 `src/uav_system/`，OpenVINS 源码位于真实目录 `src/open_vins/`。删除原三个源码/资源发现链接。
+
+- 第三方源码保持内容不变：446 个 OpenVINS 文件和 13,194 个 PX4 文件按原跟踪清单迁移，包含新路径被 ignore 规则匹配的原跟踪文件；未修改固件或估计器算法。
+- 原 build/devel/logs/.catkin_tools 保留在 `.legacy_catkin/20261005-011623/`。新工作区从空构建空间编译，未复用旧包/消息产物。
+- Jetson 上全部 6 个源码包及 catkin prebuild 成功，首次编译 21 分 8 秒，3 个第三方包有编译警告，没有失败。首次脚本收尾因运行期间脚本更新而报错；最终版本 `./scripts/build.sh --no-status` 重跑并正常退出，全部 6 个源码包成功，最后一次增量耗时 3.6 秒。
+- 构建入口显式使用 Noetic、2 个编译任务和 1 个并行包；检测 ROS2 环境时拒绝执行。调用参数转交 catkin build。
+- 39 项软件测试通过；结构检查核对真实目录、独立包发现、源码导出和显式 launch 资源引用。
+- rospack 实际解析 uav_system 到 `src/uav_system`、ov_msckf 到 `src/open_vins/ov_msckf`；新 devel 中 uav_core 和 SourceStatus/SystemStatus/EvStatus 可导入，消息类型均为 uav_system。
+- 当前 mock 配置使用 `config/test/mock.yaml`，mock launch 显式加载；配置内容未变，测试与启动引用同步。实机源配置继续位于 `config/state_sources/`。
+- 独立 ROS master `localhost:11323` 上启动新版 mock 与 Commander：static healthy，timeout/NaN unhealthy，恢复 static 可恢复健康；jump 锁定，切回 static 仍 unhealthy。ready/arm_ready=false、backend_output_enabled=false、ev_sent=false，Commander 保持 WAIT_SYSTEM。图中没有 MAVROS；验证结束已清理该轮子进程。
+- 加载外部 RealSense 工作区后使用新 devel/setup.bash --extend，确认 RealSense 可被发现，同时新的 OpenVINS 包优先于旧工作区。
+
+Jetson 日志：`/tmp/uav_workspace_layout_checks_final.log`、`/tmp/uav_workspace_layout_build.log`、`/tmp/uav_workspace_layout_build_final.log`、`/tmp/uav_layout_mock.log`、`/tmp/uav_layout_commander.log`。本次迁移未启动实机 Commander、未修改 PX4 参数或标定；以前记录的真实 VIO/融合/RC 阻塞仍未解决。本次验证不等于实机飞行或 PX4 固件构建通过。

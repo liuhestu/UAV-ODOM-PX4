@@ -2,14 +2,12 @@
 
 ## 目录约定
 
-自有代码只有一个ROS包 `uav_system`。唯一的CMakeLists.txt、package.xml与Python安装描述setup.py在 `src/uav_system/`。
-`src/` 下五个业务目录是代码模块，各模块节点直接放在对应目录；统一由uav_system的catkin_install_python导出，launch中的pkg全部为uav_system。
-根 `launch/`、`config/`、`test/` 为编辑入口。定位源配置位于 `config/state_sources/`。mock源码在test/，由同一构建清单导出。
+工作区包含两个真实源码目录：`src/uav_system/` 和 `src/open_vins/`。本节路径除另有说明外均相对 uav_system 包根目录。
 
-support保留三类内容：uav_core共享Python模块、msg状态消息、OpenVINS源码发现链接。它不包含独立ROS包清单。
-共享核心从 `src/support/uav_core` 安装；消息由uav_system生成，Python导入 `uav_system.msg`。
-OpenVINS和PX4均位于third_party，OpenVINS自带包清单保留，PX4不参与catkin构建。
-启动包中的config/launch仅为指向根目录的链接；catkin install复制根目录实际文件，保持devel/install路径一致。
+自有代码只有一个 ROS 包 uav_system，构建清单与 setup.py 在包根目录。包内 `src/` 下五个业务目录是独立代码模块，统一由 catkin_install_python 导出。
+`config/`、`launch/`、`test/` 都是包内真实目录；实机定位配置位于 `config/state_sources/`，mock 配置位于 `config/test/mock.yaml`。mock 源码在 test/，由同一构建清单导出。
+共享核心从 `src/support/uav_core` 安装；状态消息在 `src/support/msg`，由 uav_system 生成，Python 导入 `uav_system.msg`。
+OpenVINS 为工作区同级源码目录，拥有自己的 ROS 包定义。PX4 源码位于包内 `third_party/px4_autopilot`；catkin 发现 uav_system 清单后不再向包内扫描，所以固件不参与构建。配置和 launch 不再依赖符号链接。
 
 ## 接口契约
 

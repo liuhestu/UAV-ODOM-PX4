@@ -1,0 +1,2 @@
+# Task parameters only; common execution settings are in mission_executor.yaml.
+hover_seconds: 5.0

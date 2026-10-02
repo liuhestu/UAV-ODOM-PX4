@@ -1,19 +1,19 @@
-"""Commander watchdog/jump checks with isolated in-memory ROS substitutes."""
+"""Executor watchdog/jump checks with isolated in-memory ROS substitutes."""
 import importlib.util
 import threading
 import types
 import unittest
 from unittest.mock import patch
 import yaml
-from support import ROOT
-from uav_core.mission import Mission
+from support import ROOT, takeoff_task
+from mission_executor.execution import ExecutionController as Mission
 
 
-class CommanderRuntimeTests(unittest.TestCase):
+class ExecutorRuntimeTests(unittest.TestCase):
     def setUp(self):
-        self.cfg=yaml.safe_load((ROOT/'config/commander.yaml').read_text())
+        self.cfg=yaml.safe_load((ROOT/'config/mission_executor.yaml').read_text())
         self.cfg['auto_arm']=True
-        self.m=Mission(self.cfg); self.m.session='s'; self.m.preparation_mode='OFFBOARD'
+        self.m=Mission(self.cfg, takeoff_task(self.cfg)); self.m.session='s'; self.m.preparation_mode='OFFBOARD'
         self.m.hold=(0,0,0,0);self.m.target=self.m.hold
         self.clock=0.;self.tick=None;self.commands=[];self.threads=[];self.callbacks={};self.service_calls=[]
         ns=types.SimpleNamespace
@@ -55,11 +55,11 @@ class CommanderRuntimeTests(unittest.TestCase):
             module=types.ModuleType(name)
             for key,value in attrs.items():setattr(module,key,value)
             modules[name]=module
-        spec=importlib.util.spec_from_file_location('commander_under_test',ROOT/'src/commander/takeoff_hover_land.py')
+        spec=importlib.util.spec_from_file_location('executor_under_test',ROOT/'src/mission_executor/mission_executor_node.py')
         self.module=importlib.util.module_from_spec(spec)
         with patch.dict('sys.modules',modules):spec.loader.exec_module(self.module)
-        self.module.Mission=lambda cfg:self.m
-        self.module.main()
+        self.module.ExecutionController=lambda cfg,task:self.m
+        self.module.run(self.cfg, takeoff_task(self.cfg))
         clock=patch.object(self.module.time,'monotonic',lambda:self.clock);clock.start();self.addCleanup(clock.stop)
         worker=patch.object(self.module.threading,'Thread',lambda **kwargs:ns(start=lambda:self.threads.append(kwargs)))
         worker.start();self.addCleanup(worker.stop)
@@ -86,7 +86,7 @@ class CommanderRuntimeTests(unittest.TestCase):
         self.preparation_jump('WAIT_ARM')
 
     def test_flight_jump_requests_land_once(self):
-        self.m.enter('TAKEOFF',0);self.data['extended'].landed_state=2
+        self.m.task.start(0,self.m.hold);self.m.enter('TAKEOFF',0);self.m.is_active=True;self.data['extended'].landed_state=2
         self.tick();self.data['local'].pose.pose.position.x=2
         self.clock=.1;self.tick()
         self.assertEqual(self.m.state,'ABORT_LAND_MODE');self.assertEqual(len(self.threads),1)
@@ -127,7 +127,7 @@ class CommanderRuntimeTests(unittest.TestCase):
             payload=struct.pack('<I',boot_ms).ljust(8,b'\0')
             callback(types.SimpleNamespace(framing_status=1,msgid=32,sysid=1,compid=1,
                                             len=4,payload64=[struct.unpack('<Q',payload)[0]]))
-        self.m.enter('TAKEOFF',0);self.tick()
+        self.m.task.start(0,self.m.hold);self.m.enter('TAKEOFF',0);self.m.is_active=True;self.tick()
         self.assertEqual(self.m.state,'ABORTED')
         self.assertEqual(self.commands,[]);self.assertEqual(self.threads,[])
 
@@ -160,3 +160,19 @@ class CommanderRuntimeTests(unittest.TestCase):
         self.threads[0]['target']()
         self.assertEqual(self.service_calls,[])
         self.clock=1;self.tick();self.assertEqual(self.m.state,'ABORTED')
+
+    def test_generic_plugin_phase_jump_uses_active_fault_landing(self):
+        self.m.task.start(0,self.m.hold)
+        self.m.enter('CUSTOM',0);self.m.is_active=True
+        self.tick();self.data['local'].pose.pose.position.x=2
+        self.clock=.1;self.tick()
+        self.assertEqual(self.m.state,'ABORT_LAND_MODE')
+        self.assertEqual(len(self.threads),1)
+
+    def test_arm_worker_does_not_forward_after_actual_early_arm(self):
+        self.data['fcu'].armed=False
+        self.m.offboard_requested=True;self.m.enter('WAIT_ARM',0)
+        self.tick();self.assertEqual(len(self.threads),1)
+        self.data['fcu'].armed=True
+        self.threads[0]['target']()
+        self.assertEqual(self.service_calls,[])

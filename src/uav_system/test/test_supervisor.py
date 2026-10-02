@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 from support import ROOT
-from uav_core.readiness import evaluate, estimator_valid, HealthReporter
+from flight_supervisor.checks import evaluate, estimator_valid, HealthReporter
 
 
 class SupervisorTests(unittest.TestCase):

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Mission Executor entry point, ROS communication and execution loop."""
+import sys
 import math
 import struct
 import threading
@@ -12,16 +14,14 @@ from mavros_msgs.msg import State, ExtendedState, Mavlink
 from mavros_msgs.srv import SetMode, CommandBool
 from uav_system.msg import SystemStatus
 from uav_core.geometry import rotation
-from uav_core.fcu_guard import FcuGuard
-from uav_core.mission import Mission, normalize_config
+from mission_executor.execution import ExecutionController, FcuGuard
 from uav_core.runtime import Inbox, assign, xyz, xyzw, wall_loop
 
+from mission_executor.mission_loader import ExecutorLock, load_task
 
-def main():
-    rospy.init_node('takeoff_hover_land')
-    cfg=normalize_config(rospy.get_param('~'), rospy.logwarn)
-    rospy.set_param('~auto_arm', cfg['auto_arm'])
-    mission=Mission(cfg)
+
+def run(cfg, task):
+    mission=ExecutionController(cfg, task)
     box=Inbox()
     guard=FcuGuard(cfg.get('fcu_system_id',1),cfg.get('fcu_component_id',1))
     offboard_sent_at=[None]
@@ -40,7 +40,7 @@ def main():
         ('/mavros/extended_state',ExtendedState,'extended'), ('/mavros/local_position/odom',Odometry,'local')]:
         box.subscribe(topic,cls,key)
     pub=rospy.Publisher('/uav/command/trajectory',PoseStamped,queue_size=1)
-    state_pub=rospy.Publisher('/uav/commander/state',String,queue_size=1)
+    state_pub=rospy.Publisher('/uav/mission_executor/state',String,queue_size=1)
     pending={'action':None,'result':None,'start':None}
     result_lock=threading.Lock()
     def request(action):
@@ -68,7 +68,11 @@ def main():
                         ext=box.get('extended',cfg['telemetry_timeout'])
                         valid=bool(status and status.ready and status.arm_ready and
                                    status.source_session_id==mission.session and ext and ext.landed_state==1)
-                        if action=='ARM': valid=valid and fcu.mode=='OFFBOARD'
+                        if action=='ARM':
+                            if fcu.armed:
+                                with result_lock: pending['result']=(action,True)
+                                return
+                            valid=valid and fcu.mode=='OFFBOARD'
                         if not valid:
                             with result_lock: pending['result']=(action,False)
                             return
@@ -96,10 +100,10 @@ def main():
                 try:
                     R=rotation(xyzw(odom.pose.pose.orientation)); pos=xyz(odom.pose.pose.position)
                     if not np.isfinite(pos).all(): raise ValueError('invalid local position')
-                    if mission.state in ('PRESTREAM','WAIT_OFFBOARD','WAIT_ARM','TAKEOFF','HOVER') and not jump_fault[0] and last_local[0] and np.linalg.norm(np.asarray(pos)-last_local[0])>cfg['max_local_position_step']:
+                    if (mission.is_active or mission.state in ('PRESTREAM','WAIT_OFFBOARD','WAIT_ARM')) and not jump_fault[0] and last_local[0] and np.linalg.norm(np.asarray(pos)-last_local[0])>cfg['max_local_position_step']:
                         jump_fault[0]=True
                         with result_lock: busy=pending['action'] is not None
-                        mission.enter('ABORT_LAND_MODE' if mission.state in ('TAKEOFF','HOVER') and fcu and fcu.armed and fcu.mode=='OFFBOARD' and not busy else 'ABORTED',time.monotonic(),'PX4 local position jump')
+                        mission.enter('ABORT_LAND_MODE' if mission.is_active and fcu and fcu.armed and fcu.mode=='OFFBOARD' and not busy else 'ABORTED',time.monotonic(),'PX4 local position jump')
                         if mission.state=='ABORT_LAND_MODE': request('LAND')
                     last_local[0]=pos
                     local=tuple(pos)+(math.atan2(R[1,0],R[0,0]),)
@@ -123,9 +127,36 @@ def main():
         text=mission.state+(': '+mission.reason if mission.reason else '')
         state_pub.publish(String(text))
         if text!=previous[0]:
-            rospy.loginfo('Commander: %s',text); previous[0]=text
+            rospy.loginfo('Mission Executor: %s',text); previous[0]=text
     wall_loop(cfg['rate_hz'],tick)
 
 
+def main():
+    import rospkg
+    lock = ExecutorLock()  # Before init_node: duplicate startup cannot replace /mission_executor.
+    try:
+        rospy.init_node('mission_executor')
+        loaded = load_task(
+            rospkg.RosPack().get_path('uav_system'),
+            source=rospy.get_param('~mission_source', 'takeoff_hover_land'),
+            config=rospy.get_param('~mission_config', ''),
+            executor_config=rospy.get_param('~executor_config', ''),
+            auto_arm=rospy.get_param('~auto_arm_override', ''),
+            arm_method=rospy.get_param('~arm_method_override', ''), warn=rospy.logwarn)
+        for key, value in loaded.executor_config.items():
+            rospy.set_param('~' + key, value)
+        rospy.set_param('~mission', loaded.mission_config)
+        rospy.loginfo('Mission Executor source=%s mission_config=%s executor_config=%s auto_arm=%s',
+                      loaded.source_path, loaded.mission_config_path, loaded.executor_config_path,
+                      loaded.executor_config['auto_arm'])
+        run(loaded.executor_config, loaded.task)
+    finally:
+        lock.close()
+
+
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print('Mission Executor startup failed: ' + str(exc), file=sys.stderr)
+        sys.exit(1)

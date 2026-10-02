@@ -45,7 +45,7 @@ class BackendTests(unittest.TestCase):
             modules[name]=module
         tf=types.ModuleType('tf2_ros');tf.Buffer=lambda:None;tf.TransformListener=lambda *args:None
         modules['tf2_ros']=tf
-        spec=importlib.util.spec_from_file_location('backend_under_test',ROOT/'src/px4_backend/px4_backend.py')
+        spec=importlib.util.spec_from_file_location('backend_under_test',ROOT/'src/control_backend/px4_backend.py')
         self.backend=importlib.util.module_from_spec(spec)
         with patch.dict('sys.modules',modules):
             spec.loader.exec_module(self.backend);self.backend.main()

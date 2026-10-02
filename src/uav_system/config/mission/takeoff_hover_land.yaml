@@ -1,0 +1,6 @@
+# Task parameters only; common execution settings are in mission_executor.yaml.
+height: 0.5               # 相对起飞基准升高的高度，米；不是绝对高度。
+climb_rate: 0.15          # 高度目标的上升速度，米/秒。
+height_tolerance: 0.08    # 实际高度与目标高度的允许误差，米。
+hover_seconds: 5.0       # 实际到达高度容差且目标爬升完成后，悬停的时间，秒。
+flight_timeout: 20.0      # TAKEOFF 阶段到达目标高度的最长时间；超时进入故障降落。

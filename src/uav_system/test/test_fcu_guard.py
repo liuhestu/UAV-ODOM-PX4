@@ -1,6 +1,6 @@
 import unittest
 from support import ROOT
-from uav_core.fcu_guard import FcuGuard
+from mission_executor.execution import FcuGuard
 
 
 class FcuGuardTests(unittest.TestCase):

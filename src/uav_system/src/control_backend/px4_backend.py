@@ -16,7 +16,7 @@ from uav_core.runtime import Inbox, xyz, xyzw, wall_loop
 
 
 def main():
-    rospy.init_node('px4_backend')
+    rospy.init_node('control_backend')
     params = rospy.get_param('~')
     p = dict(params['backend']); p.update({k:v for k,v in params.items() if k not in ('backend','observer')})
     box = Inbox()

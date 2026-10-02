@@ -6,7 +6,7 @@ from std_msgs.msg import Bool
 from mavros_msgs.msg import State, ExtendedState, EstimatorStatus, SysStatus, StatusText
 from uav_system.msg import SourceStatus, SystemStatus, EvStatus
 from uav_core.geometry import rotation
-from uav_core.readiness import evaluate, estimator_valid, HealthReporter
+from flight_supervisor.checks import evaluate, estimator_valid, HealthReporter
 from uav_core.runtime import Inbox, xyz, xyzw, wall_loop
 
 
@@ -90,7 +90,7 @@ def main():
                 ('Source calibration/world alignment confirmed', bool(source and source.calibrated)),
                 ('Adapter calibration/world alignment confirmed', bool(adapter and adapter.calibrated)),
                 ('Real source or permitted simulation transport', not simulated or p['simulation_transport']),
-                ('ON_GROUND (additional Commander prerequisite)', bool(extended and extended.landed_state == 1)),
+                ('ON_GROUND (additional Mission Executor prerequisite)', bool(extended and extended.landed_state == 1)),
             ])
             report = reporter.update(checks, ready, arm_ready)
             if report is not None:

@@ -1,55 +1,44 @@
-"""Deterministic one-shot mission. All service actions are emitted once."""
+"""Deterministic one-shot flight execution. All service actions are emitted once."""
 import math
+from numbers import Real
+from dataclasses import dataclass
+from uav_core.validation import positive
 
 
-def normalize_config(cfg, warn=lambda message: None):
-    """Resolve YAML and explicit launch overrides without hiding conflicts."""
-    cfg = dict(cfg)
-    new_override = cfg.pop('auto_arm_override', '')
-    old_override = cfg.pop('arm_method_override', '')
-    has_new = 'auto_arm' in cfg
-    has_old = 'arm_method' in cfg
-    if has_new and has_old:
-        raise ValueError('configuration defines both auto_arm and arm_method')
-    if new_override != '' and old_override != '':
-        raise ValueError('launch defines both auto_arm and arm_method')
-    if has_old and new_override != '':
-        raise ValueError('legacy arm_method YAML cannot mix with auto_arm launch override')
-    if has_new and type(cfg['auto_arm']) is not bool:
-        raise ValueError('auto_arm must be a YAML boolean')
-    if has_old and cfg['arm_method'] not in ('auto', 'manual'):
-        raise ValueError('unknown arm_method')
-    if old_override != '' or has_old:
-        old = old_override if old_override != '' else cfg['arm_method']
-        if old not in ('auto', 'manual'):
-            raise ValueError('unknown arm_method')
-        warn('arm_method is deprecated; use auto_arm: true/false')
-        value = old == 'auto'
-    elif new_override != '':
-        if new_override not in ('true', 'false'):
-            raise ValueError('auto_arm launch argument must be true or false')
-        value = new_override == 'true'
-    else:
-        value = cfg.get('auto_arm', False)
-    cfg.pop('arm_method', None)
-    cfg['auto_arm'] = value
-    return cfg
+@dataclass(frozen=True)
+class TaskUpdate:
+    """Task target, diagnostic phase and completion result; independent of ROS."""
+    target: tuple
+    phase: str
+    done: bool = False
 
 
-class Mission:
+class ExecutionController:
     TERMINAL = {'DONE', 'BLOCKED', 'ABORTED', 'TAKEN_OVER'}
-    def __init__(self, cfg):
+    def __init__(self, cfg, task):
+        self.task=task; self.is_active=False
         self.cfg=cfg; self.state='WAIT_SYSTEM'; self.since=0; self.stable=None
         self.session=None; self.hold=None; self.target=None; self.reason=''
         self.seen_armed=False; self.preparation_mode=None; self.arm_requested=False
         self.seen_connected=False; self.offboard_requested=False
-        for name in ('height','climb_rate','hover_seconds','prestream_seconds','transition_timeout', 'flight_timeout', 'landing_timeout', 'ready_stable_seconds'):
-            value=cfg[name]
-            if not math.isfinite(value) or value<=0: raise ValueError('invalid '+name)
+        positive(cfg, ('prestream_seconds', 'transition_timeout', 'landing_timeout', 'ready_stable_seconds'))
         if type(cfg.get('auto_arm')) is not bool: raise ValueError('auto_arm must be boolean')
 
     def enter(self, state, now, reason=''):
         self.state=state; self.since=now; self.reason=reason
+        self.is_active=False
+
+    @classmethod
+    def validate_update(cls, update):
+        reserved=cls.TERMINAL | {'WAIT_SYSTEM','PRESTREAM','WAIT_OFFBOARD','WAIT_ARM',
+                                'WAIT_LAND_MODE','WAIT_LAND','WAIT_DISARM','ABORT_LAND_MODE','ABORT_LAND'}
+        if not isinstance(update,TaskUpdate) or type(update.done) is not bool:
+            raise ValueError('task must return TaskUpdate with boolean done')
+        if not isinstance(update.phase,str) or not update.phase.strip() or update.phase in reserved:
+            raise ValueError('invalid task phase')
+        if len(update.target)!=4 or any((not isinstance(v,Real) or isinstance(v,bool)) or not math.isfinite(v) for v in update.target):
+            raise ValueError('task target must contain four finite numbers')
+        return update
 
     def step(self, now, ready, session, fcu, local, landed, service_result=None, service_pending=False,
              offboard_confirmed=False):
@@ -60,7 +49,7 @@ class Mission:
         if connected:
             self.seen_connected=True
         elif self.seen_connected:
-            self.enter('ABORTED',now,'FCU telemetry lost; restart Commander for a new mission')
+            self.enter('ABORTED',now,'FCU telemetry lost; restart Mission Executor for a new mission')
             return None,None
         if connected and armed:
             self.seen_armed=True
@@ -142,7 +131,11 @@ class Mission:
                     self.enter('WAIT_OFFBOARD',now); action='OFFBOARD'
                 elif mode=='OFFBOARD':
                     self.hold=local; self.target=local
-                    self.enter('TAKEOFF',now)
+                    try:
+                        update=self.validate_update(self.task.start(now,local))
+                        self.enter(update.phase,now); self.is_active=True
+                    except Exception as exc:
+                        self.enter('ABORT_LAND_MODE',now,'task failed: '+str(exc)); action='LAND'; command=None
                 else:
                     self.enter('TAKEN_OVER',now,'OFFBOARD lost after confirmation')
             elif self.cfg['auto_arm']:
@@ -151,18 +144,50 @@ class Mission:
                 elif service_result and service_result[0]=='ARM' and not service_result[1]: self.enter('BLOCKED',now,'ARM rejected; inspect PX4 report')
                 elif now-self.since>self.cfg['transition_timeout']: self.enter('BLOCKED',now,'ARM state timeout')
             else: self.reason='waiting for actual ARM; automatic ARM requests disabled'
-        elif self.state in ('TAKEOFF','HOVER') and not preparing:
+        elif self.is_active and not preparing:
             if not armed:
                 self.enter('ABORTED',now,'unexpected disarm'); return None, None
-            x,y,z,yaw=self.hold
-            target_z=z+min(self.cfg['height'], self.cfg['climb_rate']*(now-self.since)) if self.state=='TAKEOFF' else z+self.cfg['height']
-            self.target=(x,y,target_z,yaw); command=self.target
-            if self.state=='TAKEOFF':
-                if abs(local[2]-(z+self.cfg['height']))<self.cfg['height_tolerance'] and target_z>=z+self.cfg['height']:
-                    self.enter('HOVER',now)
-                elif now-self.since>self.cfg['flight_timeout']:
-                    self.enter('ABORT_LAND_MODE',now,'takeoff timeout'); action='LAND'; command=None
-            elif now-self.since>=self.cfg['hover_seconds']:
-                self.enter('WAIT_LAND_MODE',now); action='LAND'
+            try:
+                update=self.validate_update(self.task.step(now,local))
+                self.target=tuple(update.target); command=self.target
+                if update.phase!=self.state:
+                    self.enter(update.phase,now); self.is_active=True
+                if update.done:
+                    self.enter('WAIT_LAND_MODE',now); action='LAND'
+            except Exception as exc:
+                self.enter('ABORT_LAND_MODE',now,'task failed: '+str(exc)); action='LAND'; command=None
         if self.state in self.TERMINAL: command=None
         return command, action
+
+
+class FcuGuard:
+    def __init__(self, system_id=1, component_id=1):
+        if any(type(value) is not int or not 1 <= value <= 255 for value in (system_id,component_id)):
+            raise ValueError('invalid FCU MAVLink identity')
+        self.system_id = system_id
+        self.component_id = component_id
+        self.connected_once = False
+        self.boot_clocks = {}
+        self.fault = ''
+
+    def observe_connection(self, connected):
+        if connected:
+            self.connected_once = True
+        elif self.connected_once:
+            self.fault = self.fault or 'FCU connection interrupted; restart Mission Executor for a new mission'
+
+    def observe_boot(self, system_id, component_id, message_id, boot_ms):
+        if (system_id, component_id) != (self.system_id, self.component_id):
+            return
+        if message_id not in (2, 30, 31, 32) or not 0 <= boot_ms <= 0xffffffff:
+            return
+        previous = self.boot_clocks.get(message_id)
+        # Separate clocks avoid cross-stream ordering. Ignore small packet
+        # reordering and the normal uint32 rollover after about 49.7 days.
+        if previous is not None and boot_ms < previous:
+            rollover = previous >= 0xffff0000 and boot_ms < 0x10000
+            if previous - boot_ms > 1000 and not rollover:
+                self.fault = self.fault or 'FCU boot clock reset; restart Mission Executor for a new mission'
+            if not rollover:
+                return
+        self.boot_clocks[message_id] = boot_ms

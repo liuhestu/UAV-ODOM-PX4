@@ -1,0 +1,18 @@
+# 公共任务执行设置：推进状态机、生成目标、确认模式/ARM 和处理任务终止。
+# 本文件不写入 PX4 参数；px4.yaml 配置 Backend 的实际转发与最终命令检查。
+# 两处同名的频率、超时和预发送参数分别作用于各自节点，不互相覆盖。
+auto_arm: true             # 严格布尔值；核心检查和实际 OFFBOARD 确认通过后允许请求 ARM。
+fcu_system_id: 1           # 目标 FCU 的 MAVLink system ID，用于识别启动时钟回退/重启。
+fcu_component_id: 1        # 目标 FCU 的 MAVLink component ID，必须与实际飞控匹配。
+rate_hz: 30.0              # 检查状态、推进任务和向 Backend 发布目标的频率，Hz；不是 MAVROS 转发频率。
+prestream_seconds: 2.5    # Executor 预发送地面保持目标的时长，秒；完成后请求 OFFBOARD。
+                         # 发布目标不等于已转发；Backend 另行检查实际连续转发时长，见 px4.yaml。
+ready_stable_seconds: 2.0 # 就绪、通信、鲜活 local 位姿及 ON_GROUND 连续满足的时间。
+transition_timeout: 8.0   # 飞行服务请求及模式/解锁/上锁状态确认的超时。
+landing_timeout: 60.0     # 等待实际落地的超时；超时终止任务，不自动重试。
+status_timeout: 0.5       # Executor 接受 /uav/system/status 的鲜活阈值，秒；用于任务执行门控。
+state_timeout: 0.5        # PX4 /mavros/local_position/odom 的鲜活阈值，秒；用于保持目标与任务反馈。
+                         # 不同于 Backend 的 state_timeout，后者检查 canonical 里程计和适配器健康。
+telemetry_timeout: 2.0    # Executor 接受 FCU mode/armed、连接与 landed 遥测的鲜活阈值，秒。
+                         # 用于确认状态转换和任务终止；Backend 独立检查命令发送时的遥测。
+max_local_position_step: 0.5 # 相邻处理的 PX4 local 位置允许的最大变化，米；不是速度限值。

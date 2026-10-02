@@ -11,7 +11,7 @@ import rosnode
 import rospy
 from nav_msgs.msg import Odometry
 from uav_system.msg import SourceStatus
-from uav_core.config import load_source
+from uav_core.source_config import load_source
 from uav_core.runtime import wall_loop
 
 

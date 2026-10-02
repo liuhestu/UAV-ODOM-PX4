@@ -21,7 +21,7 @@ uav_odom_px4/
 cd uav_odom_px4
 ./scripts/build.sh
 source devel/setup.bash
-python3 -m pip install -r src/uav_system/test/requirements.txt
+python3 -m pip install -r src/uav_system/requirements.txt
 bash src/uav_system/scripts/run_checks.sh
 ```
 
@@ -35,6 +35,6 @@ bash src/uav_system/scripts/run_checks.sh
 
 - [业务包说明与启动入口](src/uav_system/README.md)
 - [架构与接口](src/uav_system/docs/ARCHITECTURE.md)
-- [验证记录](src/uav_system/docs/VALIDATION.md)
+- [验证记录](src/uav_system/docs/LOCAL_VALIDATION.md)
 
-先完成验证再执行任务。启动 Commander 后，就绪时会自动请求模式与解锁；当前实机 VIO 和融合检查仍有未解决阻塞。
+先完成验证再执行任务。启动 Mission Executor 后，就绪时会自动请求模式与解锁；当前实机 VIO 和融合检查仍有未解决阻塞。

@@ -1,9 +1,26 @@
 import copy
+import importlib.util
+import types
 import unittest
+from unittest.mock import patch
 from support import ROOT
-from uav_core.evidence import (TOPICS, SINGLE_EKF_PARAMETERS, parse_listener,
+from flight_supervisor.checks import (TOPICS, SINGLE_EKF_PARAMETERS, parse_listener,
                                evaluate_listener, verify_single_ekf_parameters)
-from uav_core.mavlink_serial import encode
+
+
+# Import the actual observer with inert ROS substitutes; main() is never called.
+modules={}
+for name,fields in {'rospy':(), 'mavros_msgs.msg':('Mavlink','State'),
+                    'mavros_msgs.srv':('ParamGet',),
+                    'uav_system.msg':('SourceStatus','EvStatus')}.items():
+    module=types.ModuleType(name)
+    for field in fields:setattr(module,field,object)
+    modules[name]=module
+spec=importlib.util.spec_from_file_location('observer_protocol_under_test',
+                                          ROOT/'src/flight_supervisor/px4_ev_observer.py')
+observer=importlib.util.module_from_spec(spec)
+with patch.dict('sys.modules',modules):spec.loader.exec_module(observer)
+encode=observer.encode
 
 
 def sample():

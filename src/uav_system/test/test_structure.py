@@ -1,12 +1,63 @@
 import ast
+from pathlib import Path
 import re
 import unittest
 import xml.etree.ElementTree as ET
+import yaml
 from support import ROOT, WORKSPACE
-from uav_core.config import load_source
+from uav_core.source_config import load_source
 
 
 class StructureTests(unittest.TestCase):
+    def test_domain_ownership_and_shared_dependency_direction(self):
+        core=ROOT/'src/support/uav_core'
+        self.assertEqual({p.name for p in core.glob('*.py')},
+                         {'__init__.py','runtime.py','geometry.py','source_config.py','validation.py'})
+        domains={'mission','mission_executor','flight_supervisor','control_backend'}
+        for p in core.glob('*.py'):
+            for node in ast.walk(ast.parse(p.read_text())):
+                if isinstance(node,ast.Import):
+                    imports=[alias.name for alias in node.names]
+                elif isinstance(node,ast.ImportFrom):
+                    imports=[node.module or '']
+                else:continue
+                self.assertFalse(domains.intersection(name.split('.')[0] for name in imports),str(p))
+        for p in (ROOT/'src/mission').glob('*.py'):
+            for node in ast.walk(ast.parse(p.read_text())):
+                if isinstance(node,ast.ImportFrom):
+                    if node.module!='mission_executor.execution':
+                        self.assertNotIn((node.module or '').split('.')[0],
+                                         {'rospy','mavros_msgs','mission_executor','control_backend'})
+                elif isinstance(node,ast.Import):
+                    self.assertFalse({'rospy','mission_executor','control_backend'}.intersection(
+                        alias.name.split('.')[0] for alias in node.names))
+        self.assertFalse((ROOT/'src/commander').exists())
+        self.assertFalse((ROOT/'src/px4_backend').exists())
+        self.assertFalse((ROOT/'launch/commander.launch').exists())
+
+    def test_namespace_packages_and_script_only_missions(self):
+        self.assertEqual(list((ROOT/'src').rglob('__init__.py')),
+                         [ROOT/'src/support/uav_core/__init__.py'])
+        self.assertEqual({p.name for p in (ROOT/'src/mission').glob('*.py')},
+                         {'hover.py','takeoff_hover_land.py'})
+
+    def test_supervisor_and_backend_config_ownership(self):
+        backend=yaml.safe_load((ROOT/'config/px4.yaml').read_text())
+        supervisor=yaml.safe_load((ROOT/'config/flight_supervisor.yaml').read_text())
+        self.assertEqual(set(backend),{'backend'})
+        self.assertEqual(set(supervisor),{'state_timeout','telemetry_timeout','evidence_timeout',
+                                          'required_sensor_mask','observer'})
+        self.assertFalse((ROOT/'config/safety.yaml').exists())
+        tree=ET.parse(ROOT/'launch/uav_system.launch')
+        expected={'control_backend':'px4.yaml','flight_supervisor':'flight_supervisor.yaml',
+                  'px4_ev_observer':'flight_supervisor.yaml'}
+        for node in tree.findall('.//node'):
+            name=node.attrib['name']
+            if name not in expected:continue
+            files=[Path(entry.attrib['file']).name for entry in node.findall('rosparam')
+                   if entry.attrib.get('command')=='load']
+            self.assertEqual(files,[expected[name]])
+
     def test_source_schemas(self):
         for p in (ROOT/'config').glob('*/mock.yaml'):
             self.assertEqual(p,ROOT/'config/test/mock.yaml')
@@ -26,7 +77,7 @@ class StructureTests(unittest.TestCase):
         self.assertTrue((ROOT/'config/test/mock.yaml').is_file())
     def test_all_native_python_parses(self):
         ast.parse((ROOT/'setup.py').read_text(),filename=str(ROOT/'setup.py'))
-        for d in ('support/uav_core','state_source_manager','state_adapter','flight_supervisor','px4_backend','commander'):
+        for d in ('support/uav_core','state_source_manager','state_adapter','flight_supervisor','control_backend','mission','mission_executor'):
             for p in (ROOT/'src'/d).rglob('*.py'):ast.parse(p.read_text(),filename=str(p))
     def test_manifests_and_launch_xml(self):
         from catkin_pkg.package import parse_package
@@ -64,7 +115,7 @@ class StructureTests(unittest.TestCase):
         for folder in ('config','launch'):self.assertIn('/'+folder+'/',cmake)
         self.assertIn('/test/mock_state_source.py',cmake)
         self.assertTrue((ROOT/'test/test_state_adapter.py').exists())
-        self.assertTrue((ROOT/'launch/commander.launch').exists())
+        self.assertTrue((ROOT/'launch/mission_executor.launch').exists())
     def test_catkin_discovers_one_native_package_and_openvins(self):
         from catkin_pkg.packages import find_packages
         packages=find_packages(str(WORKSPACE/'src'))
@@ -80,7 +131,7 @@ class StructureTests(unittest.TestCase):
         self.assertFalse((WORKSPACE/'package.xml').exists())
         build=WORKSPACE/'scripts/build.sh'
         self.assertTrue(build.stat().st_mode&0o111)
-        for folder in ('state_source_manager','state_adapter','flight_supervisor','px4_backend','commander'):
+        for folder in ('state_source_manager','state_adapter','flight_supervisor','control_backend','mission','mission_executor'):
             for item in ('scripts','CMakeLists.txt','package.xml'):
                 self.assertFalse((ROOT/'src'/folder/item).exists())
         for msg in ('SourceStatus','SystemStatus','EvStatus'):

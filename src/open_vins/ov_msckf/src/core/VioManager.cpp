@@ -228,6 +228,9 @@ void VioManager::feed_measurement_simulation(double timestamp, const std::vector
       propagator->clean_old_imu_measurements(timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
       updaterZUPT->clean_old_imu_measurements(timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
       propagator->invalidate_cache();
+      // A successful stationary update is a completed filter update too.
+      // Otherwise initialized() stays false until the first feature update.
+      timelastupdate = timestamp;
       return;
     }
   }
@@ -301,6 +304,9 @@ void VioManager::track_image_and_update(const ov_core::CameraData &message_const
       propagator->clean_old_imu_measurements(message.timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
       updaterZUPT->clean_old_imu_measurements(message.timestamp + state->_calib_dt_CAMtoIMU->value()(0) - 0.10);
       propagator->invalidate_cache();
+      // Permit odometry publication after static initialization followed by
+      // ZUPT, without requiring the vehicle to move for a feature update.
+      timelastupdate = message.timestamp;
       return;
     }
   }

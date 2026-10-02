@@ -14,7 +14,13 @@ class StructureTests(unittest.TestCase):
             if p.parent.name not in ('state_sources','test'):continue
             cfg=load_source(p)
             self.assertEqual(cfg['schema_version'],1)
-            if p.stem!='mock':self.assertFalse(cfg['extrinsic']['calibrated'])
+            self.assertIs(type(cfg['extrinsic']['calibrated']), bool)
+            self.assertIs(type(cfg['world_alignment']['verified']), bool)
+            if p.stem=='openvins':
+                self.assertTrue(cfg['extrinsic']['calibrated'])
+                self.assertTrue(cfg['world_alignment']['verified'])
+            elif p.stem!='mock':
+                self.assertFalse(cfg['extrinsic']['calibrated'])
         self.assertFalse((ROOT/'config/sources').exists())
         self.assertFalse((ROOT/'config/state_sources/mock.yaml').exists())
         self.assertTrue((ROOT/'config/test/mock.yaml').is_file())

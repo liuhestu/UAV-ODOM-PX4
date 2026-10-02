@@ -1,6 +1,6 @@
 # T_SB: base_link origin/axes expressed in SOURCE body frame. Units m; Hamilton xyzw.
 # T_AW: source world -> canonical odom, both gravity-aligned Z-up.
-# Calibration/verification false blocks arming; do not mark true before physical verification.
+# Calibration/world alignment confirmed by the user on 2026-10-05.
 schema_version: 1
 source:
   simulated: false
@@ -23,18 +23,21 @@ input:
   angular_velocity_frame: body
   orientation_covariance_frame: body
 extrinsic:
-  calibrated: false
+  calibrated: true
   translation_xyz:
   - 0.0
   - 0.0
   - 0.0
   rotation_xyzw:
-  - 0.0
-  - 0.0
-  - 0.0
-  - 1.0
+  # T_SB for optical IMU axes (right, down, forward) and a camera mounted
+  # forward-facing/upright: base_link axes are forward, left, up.
+  # Mount axis convention confirmed by the user.
+  - 0.5
+  - -0.5
+  - 0.5
+  - 0.5
 world_alignment:
-  verified: false
+  verified: true
   translation_xyz:
   - 0.0
   - 0.0

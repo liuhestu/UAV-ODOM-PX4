@@ -1,7 +1,8 @@
 import copy
 import unittest
 from support import ROOT
-from uav_core.evidence import TOPICS, parse_listener, evaluate_listener
+from uav_core.evidence import (TOPICS, SINGLE_EKF_PARAMETERS, parse_listener,
+                               evaluate_listener, verify_single_ekf_parameters)
 from uav_core.mavlink_serial import encode
 
 
@@ -9,10 +10,28 @@ def sample():
     aid=dict(timestamp=10000000,time_last_fuse=9900000,fused=True,innovation_rejected=False,estimator_instance=0)
     return dict(zip(TOPICS,[dict(timestamp=10000000,timestamp_sample=9900000),aid,dict(aid),
         dict(timestamp=10010000,xy_valid=True,z_valid=True,v_xy_valid=True,v_z_valid=True,
-             xy_reset_counter=1,z_reset_counter=2,vxy_reset_counter=3,vz_reset_counter=4,heading_reset_counter=5)]))
+             xy_reset_counter=1,z_reset_counter=2,vxy_reset_counter=3,vz_reset_counter=4,heading_reset_counter=5),
+        dict(timestamp=10000000,cs_ev_pos=True,cs_ev_hgt=True,cs_fake_pos=False,
+             cs_valid_fake_pos=False,cs_inertial_dead_reckoning=False)]))
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_single_ekf_sensor_voting_without_optional_mag_parameter(self):
+        verify_single_ekf_parameters(dict(SINGLE_EKF_PARAMETERS))
+
+    def test_single_ekf_missing_unknown_or_multi_parameters_rejected(self):
+        for name in SINGLE_EKF_PARAMETERS:
+            for value in (None, -1, 2, True, '1'):
+                parameters=dict(SINGLE_EKF_PARAMETERS);parameters[name]=value
+                with self.subTest(name=name,value=value),self.assertRaises(ValueError):
+                    verify_single_ekf_parameters(parameters)
+            parameters=dict(SINGLE_EKF_PARAMETERS);del parameters[name]
+            with self.assertRaises(ValueError):verify_single_ekf_parameters(parameters)
+        parameters=dict(SINGLE_EKF_PARAMETERS);parameters['SENS_IMU_MODE']=0
+        with self.assertRaises(ValueError):verify_single_ekf_parameters(parameters)
+        parameters=dict(SINGLE_EKF_PARAMETERS);parameters['SENS_MAG_MODE']=0
+        with self.assertRaises(ValueError):verify_single_ekf_parameters(parameters)
+
     def test_real_format_and_fail_closed(self):
         text='listener estimator_aid_src_ev_pos -n 1 -i 0\nTOPIC: estimator_aid_src_ev_pos instance 0 #1\n timestamp: 10000000 (0.01 seconds ago)\n time_last_fuse: 9999999\n fused: True\n innovation_rejected: False\n estimator_instance: 0\nnsh> '
         parsed=parse_listener(TOPICS[1],text)
@@ -22,6 +41,14 @@ class EvidenceTests(unittest.TestCase):
         text='TOPIC: estimator_aid_src_ev_pos instance 0 #1\n fused: 1\n innovation_rejected: 0\n'
         parsed=parse_listener(TOPICS[1],text)
         self.assertIs(parsed['fused'],True);self.assertIs(parsed['innovation_rejected'],False)
+    def test_additional_firmware_boolean_fields_do_not_break_parsing(self):
+        text=('TOPIC: estimator_aid_src_ev_pos instance 0 #1\n'
+              ' timestamp: 10000000\n fusion_enabled: False\n'
+              ' fused: True\n innovation_rejected: False\n')
+        parsed=parse_listener(TOPICS[1],text)
+        self.assertIs(parsed['fusion_enabled'],False)
+        self.assertIs(parsed['fused'],True)
+        self.assertEqual(parsed['timestamp'],10000000)
     def test_fresh_fused_and_reset_encoding(self):
         received,fused,reset=evaluate_listener(sample(),2)
         self.assertTrue(received);self.assertTrue(fused);self.assertEqual(reset,0x0504030201)
@@ -34,6 +61,13 @@ class EvidenceTests(unittest.TestCase):
         with self.assertRaises(KeyError):evaluate_listener(s,2)
     def test_old_input_not_received(self):
         s=sample();s[TOPICS[0]]['timestamp_sample']=1;self.assertFalse(evaluate_listener(s,2)[0])
+    def test_fake_stale_or_missing_control_state_never_fused(self):
+        for name,value in [('cs_ev_pos',False),('cs_ev_hgt',False),('cs_fake_pos',True),
+                           ('cs_valid_fake_pos',True),('cs_inertial_dead_reckoning',True),('timestamp',1)]:
+            s=sample();s[TOPICS[4]][name]=value
+            self.assertFalse(evaluate_listener(s,2)[1])
+        s=sample();del s[TOPICS[4]]['cs_fake_pos']
+        with self.assertRaises(KeyError):evaluate_listener(s,2)
     def test_serial_control_against_official_pymavlink(self):
         from pymavlink.dialects.v10 import common
         data='listener vehicle_visual_odometry -n 1 -i 0\n'

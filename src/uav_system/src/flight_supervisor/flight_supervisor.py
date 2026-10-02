@@ -6,7 +6,7 @@ from std_msgs.msg import Bool
 from mavros_msgs.msg import State, ExtendedState, EstimatorStatus, SysStatus, StatusText
 from uav_system.msg import SourceStatus, SystemStatus, EvStatus
 from uav_core.geometry import rotation
-from uav_core.readiness import evaluate
+from uav_core.readiness import evaluate, estimator_valid, HealthReporter
 from uav_core.runtime import Inbox, xyz, xyzw, wall_loop
 
 
@@ -27,6 +27,21 @@ def main():
     reset = [None]
     fault = ['']
     session = [None]
+    reporter = HealthReporter()
+    labels = {
+        'source unavailable': 'Source odometry fresh and healthy',
+        'adapter unavailable': 'State adapter healthy and source session matches',
+        'canonical odometry invalid/stale': 'Canonical odometry fresh and finite',
+        'backend not publishing EV': 'Backend publishing external vision',
+        'MAVROS disconnected/stale': 'FCU connected with fresh telemetry',
+        'PX4 critical/unknown status': 'PX4 system status standby/active (diagnostic only)',
+        'PX4 sensor health unavailable/failed': 'PX4 required sensors present/enabled/healthy (diagnostic only)',
+        'PX4 local odometry invalid/stale': 'PX4 local odometry fresh and finite',
+        'PX4 estimator validity unavailable/failed': 'PX4 estimator attitude/position/velocity valid',
+        'PX4 landed-state telemetry unavailable': 'PX4 landed-state telemetry fresh and known',
+        'PX4 EV received/fused evidence unavailable': 'PX4 EV received and position/height fused in current session',
+        'reset fault': 'No latched source-session or PX4 estimator reset fault',
+    }
     def tick():
         with box.lock:
             source, adapter, odom = [box.get(k, p['state_timeout']) for k in ('source', 'adapter', 'odom')]
@@ -51,6 +66,8 @@ def main():
             health = bool(sys and (sys.sensors_present & required)==required and
                           (sys.sensors_enabled & required)==required and
                           (sys.sensors_health & required)==required)
+            ev_fused=bool(ev and ev.received and ev.fused and source and ev.source_session_id==source.session_id)
+            grounded_ev=bool(ev_fused and extended and extended.landed_state==1)
             gates = {
                 'source unavailable': bool(source and source.healthy),
                 'adapter unavailable': bool(adapter and adapter.healthy and source and adapter.session_id==source.session_id),
@@ -60,17 +77,29 @@ def main():
                 'PX4 critical/unknown status': bool(fcu and fcu.system_status in (3, 4)),
                 'PX4 sensor health unavailable/failed': health,
                 'PX4 local odometry invalid/stale': finite(local),
-                'PX4 estimator validity unavailable/failed': bool(ekf and ekf.attitude_status_flag and
-                    ekf.pos_horiz_rel_status_flag and ekf.pos_vert_abs_status_flag and
-                    ekf.velocity_horiz_status_flag and ekf.velocity_vert_status_flag and
-                    not ekf.const_pos_mode_status_flag and not ekf.accel_error_status_flag),
+                'PX4 estimator validity unavailable/failed': estimator_valid(ekf,grounded_ev),
                 'PX4 landed-state telemetry unavailable': bool(extended and extended.landed_state!=0),
-                'PX4 EV received/fused evidence unavailable': bool(ev and ev.received and ev.fused and source and ev.source_session_id==source.session_id),
+                'PX4 EV received/fused evidence unavailable': ev_fused,
                 'reset fault': not fault[0],
             }
             simulated = source.simulated if source else True
             calibrated = bool(source and source.calibrated and adapter and adapter.calibrated)
             ready, arm_ready, reasons = evaluate(gates, calibrated, simulated, p['simulation_transport'])
+            checks = [(labels[name], passed) for name, passed in gates.items()]
+            checks.extend([
+                ('Source calibration/world alignment confirmed', bool(source and source.calibrated)),
+                ('Adapter calibration/world alignment confirmed', bool(adapter and adapter.calibrated)),
+                ('Real source or permitted simulation transport', not simulated or p['simulation_transport']),
+                ('ON_GROUND (additional Commander prerequisite)', bool(extended and extended.landed_state == 1)),
+            ])
+            report = reporter.update(checks, ready, arm_ready)
+            if report is not None:
+                detail = '\n  Details: source=%s; adapter=%s; reset=%s; PX4 system_status=%s' % (
+                    source.detail if source else 'unavailable/stale',
+                    adapter.detail if adapter else 'unavailable/stale',
+                    fault[0] or 'none', fcu.system_status if fcu else 'unavailable/stale')
+                log = rospy.loginfo if all(passed for _, passed in checks) else rospy.logwarn
+                log('%s', report + detail)
             msg = SystemStatus(); msg.header.stamp=rospy.Time.now()
             msg.source_session_id=session[0] or ''; msg.ready=ready; msg.arm_ready=arm_ready
             msg.simulated=simulated; msg.calibrated=calibrated

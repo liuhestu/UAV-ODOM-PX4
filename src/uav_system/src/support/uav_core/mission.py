@@ -42,6 +42,7 @@ class Mission:
         self.cfg=cfg; self.state='WAIT_SYSTEM'; self.since=0; self.stable=None
         self.session=None; self.hold=None; self.target=None; self.reason=''
         self.seen_armed=False; self.preparation_mode=None; self.arm_requested=False
+        self.seen_connected=False; self.offboard_requested=False
         for name in ('height','climb_rate','hover_seconds','prestream_seconds','transition_timeout', 'flight_timeout', 'landing_timeout', 'ready_stable_seconds'):
             value=cfg[name]
             if not math.isfinite(value) or value<=0: raise ValueError('invalid '+name)
@@ -50,11 +51,17 @@ class Mission:
     def enter(self, state, now, reason=''):
         self.state=state; self.since=now; self.reason=reason
 
-    def step(self, now, ready, session, fcu, local, landed, service_result=None, service_pending=False):
+    def step(self, now, ready, session, fcu, local, landed, service_result=None, service_pending=False,
+             offboard_confirmed=False):
         # fcu=(connected, armed, mode); local=(x,y,z,yaw); result=(action, accepted)
         action=None; command=None
         if self.state in self.TERMINAL: return command, action
         connected, armed, mode = fcu if fcu else (False, False, '')
+        if connected:
+            self.seen_connected=True
+        elif self.seen_connected:
+            self.enter('ABORTED',now,'FCU telemetry lost; restart Commander for a new mission')
+            return None,None
         if connected and armed:
             self.seen_armed=True
         elif connected and self.seen_armed and not armed:
@@ -122,24 +129,28 @@ class Mission:
         if service_pending: return command,None
         if self.state=='PRESTREAM':
             if now-self.since>=self.cfg['prestream_seconds']:
-                if mode=='OFFBOARD':
-                    self.enter('WAIT_ARM',now)
-                else:
-                    self.enter('WAIT_OFFBOARD',now); action='OFFBOARD'
+                self.offboard_requested=True
+                self.enter('WAIT_OFFBOARD',now); action='OFFBOARD'
         elif self.state=='WAIT_OFFBOARD':
-            if mode=='OFFBOARD': self.enter('WAIT_ARM',now)
+            if mode=='OFFBOARD' and offboard_confirmed: self.enter('WAIT_ARM',now)
             elif service_result and service_result[0]=='OFFBOARD' and not service_result[1]: self.enter('BLOCKED',now,'OFFBOARD rejected')
             elif now-self.since>self.cfg['transition_timeout']: self.enter('BLOCKED',now,'OFFBOARD state timeout')
         if self.state=='WAIT_ARM':
             if armed:
-                self.hold=local; self.target=local
-                self.enter('TAKEOFF',now)
+                if not self.offboard_requested:
+                    self.offboard_requested=True
+                    self.enter('WAIT_OFFBOARD',now); action='OFFBOARD'
+                elif mode=='OFFBOARD':
+                    self.hold=local; self.target=local
+                    self.enter('TAKEOFF',now)
+                else:
+                    self.enter('TAKEN_OVER',now,'OFFBOARD lost after confirmation')
             elif self.cfg['auto_arm']:
                 if not self.arm_requested:
                     self.arm_requested=True; self.since=now; action='ARM'
                 elif service_result and service_result[0]=='ARM' and not service_result[1]: self.enter('BLOCKED',now,'ARM rejected; inspect PX4 report')
                 elif now-self.since>self.cfg['transition_timeout']: self.enter('BLOCKED',now,'ARM state timeout')
-            else: self.reason='waiting for remote-control ARM'
+            else: self.reason='waiting for actual ARM; automatic ARM requests disabled'
         elif self.state in ('TAKEOFF','HOVER') and not preparing:
             if not armed:
                 self.enter('ABORTED',now,'unexpected disarm'); return None, None

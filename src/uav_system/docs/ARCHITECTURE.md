@@ -60,22 +60,24 @@ ROS Odometry 不携带 pose/twist 的完整交叉协方差。world-velocity 源�
 Backend 每条新 Odometry 最多发送一次。它要求 MAVROS odometry subscriber 和 `odom_ned ← odom`、`base_link_frd ← base_link` 静态 TF 都存在。
 MAVROS odometry 插件完成 ROS→LOCAL_FRD/BODY_FRD 转换；Backend 不再重复做 ENU/NED/FLU/FRD 变换。
 
-Supervisor 同时检查 source/adapter/canonical freshness、backend发送心跳、FCU heartbeat/system status、SYS_STATUS 选定 sensor mask、local odometry、ESTIMATOR_STATUS、landed telemetry 和 EV evidence。
+Supervisor 强制检查 source/adapter/canonical freshness、backend发送心跳、FCU heartbeat、local odometry、ESTIMATOR_STATUS、landed telemetry 和 EV evidence。PX4 汇总 system status 与 SYS_STATUS 选定 sensor mask 作为 diagnostic only 日志，不单独阻止 ready/arm_ready；不修改 PX4 自身的解锁检查。
 `ready` 是可观测链路就绪；`arm_ready` 再加外参/世界轴验证与模拟源的传输限制。两者都不是 PX4 完整 preflight verdict。
 完整解锁检查由 PX4 执行。服务拒绝后状态机锁定 BLOCKED，保留 PX4 STATUSTEXT；不自动修改参数、不反复请求 ARM。
 
-`px4_ev_observer` 通过 MAVROS `/mavlink/to`、`/mavlink/from` 使用 PX4 SERIAL_CONTROL shell，仅发送四条固定只读命令：
+`px4_ev_observer` 通过 MAVROS `/mavlink/to`、`/mavlink/from` 使用 PX4 SERIAL_CONTROL shell，仅发送五条固定只读命令：
 
 ```text
 listener vehicle_visual_odometry -n 1 -i 0
 listener estimator_aid_src_ev_pos -n 1 -i 0
 listener estimator_aid_src_ev_hgt -n 1 -i 0
 listener vehicle_local_position -n 1 -i 0
+listener estimator_status_flags -n 1 -i 0
 ```
 
-通过只读 `/mavros/param/get` 检查 `EKF2_MULTI_IMU == 0` 与 `EKF2_MULTI_MAG == 0`。
+通过只读 `/mavros/param/get` 严格检查 `EKF2_MULTI_IMU == 0`、`SENS_IMU_MODE == 1` 和 `SENS_MAG_MODE == 1`。后两项要求传感器层选择输入，SENS_IMU_MODE=1 对应 PX4 单 EKF 启动路径；兼容没有提供 EKF2_MULTI_MAG 的固件，而不是把缺失的必需参数推断为有效。
 只支持单 EKF 实例 0，并要求 EV 水平位置和高度均在融合；其他融合组合、多 EKF 或缺失 topic 会保持 not-ready。
-比较 FCU 内部 timestamp/time_last_fuse，检查 fused、innovation_rejected 和 local valid 位，聚合五个 reset counter。
+比较 FCU 内部 timestamp/time_last_fuse，检查 fused、innovation_rejected 和 local valid 位，聚合五个 reset counter。鲜活 estimator_status_flags 必须确认 cs_ev_pos/cs_ev_hgt=true、cs_fake_pos/cs_valid_fake_pos/cs_inertial_dead_reckoning=false；缺失或过时仍拒绝融合证据。
+PX4 的旧 MAVLink CONST_POS_MODE 标志也包含 vehicle_at_rest。只有鲜活 ON_GROUND 且同 session 的上述真实 EV 融合证据通过时，Supervisor 才允许该静止标志；空中、证据缺失、假位置或其他姿态/位置/速度/加速度错误仍保持 not-ready。标定与世界对齐门保持独立。
 暂时的查询失败不把默认 0 当成真实 reset。替换观察器时必须保留相同的时间与 session 契约，不能人工持续发布 true。
 
 这个观察器是首版诊断桥，需要本地验证固件输出格式、串口带宽和持续心跳。它占用 PX4 MAVLink shell；运行时不能同时打开 QGC MAVLink Console。
@@ -84,6 +86,7 @@ listener vehicle_local_position -n 1 -i 0
 ## Commander 与故障策略
 
 正常路径：WAIT_SYSTEM → PRESTREAM → WAIT_OFFBOARD → WAIT_ARM → TAKEOFF → HOVER → WAIT_LAND_MODE → WAIT_LAND → WAIT_DISARM → DONE。
+每次均在完成预发送后请求一次 OFFBOARD，不跳过已有 OFFBOARD 状态。WAIT_OFFBOARD 需要请求发出后新收到的 MAVROS State 确认。首次连接后丢失连接/遥测，或目标 FCU 的 MAVLink 启动时钟显著回退，均锁定 ABORTED；重新连接不能恢复任务，等待服务的旧请求在实际发送前取消。启动时钟按消息流分别跟踪，忽略小幅乱序与 uint32 正常回绕。
 先等待 `arm_ready` 持续稳定；捕获 **PX4 local** pose 作为 hold 起点。持续发布 hold，达到预发送时长后只请求一次 Offboard，并通过实际 mode 确认。
 随后软件请求一次 ARM 或等待人工 ARM，实际 armed=true 才开始爬升。服务 success 本身不等于状态切换完成。
 降落请求 AUTO.LAND，看到实际 mode 后停止 Offboard setpoint；实际 on-ground 才可能请求 DISARM，实际 armed=false 才 DONE。

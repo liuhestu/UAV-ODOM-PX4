@@ -15,7 +15,7 @@ class CommanderRuntimeTests(unittest.TestCase):
         self.cfg['auto_arm']=True
         self.m=Mission(self.cfg); self.m.session='s'; self.m.preparation_mode='OFFBOARD'
         self.m.hold=(0,0,0,0);self.m.target=self.m.hold
-        self.clock=0.;self.tick=None;self.commands=[];self.threads=[]
+        self.clock=0.;self.tick=None;self.commands=[];self.threads=[];self.callbacks={};self.service_calls=[]
         ns=types.SimpleNamespace
         self.data={'system':ns(ready=True,arm_ready=True,source_session_id='s'),
                    'fcu':ns(connected=True,armed=True,mode='OFFBOARD'),
@@ -27,11 +27,17 @@ class CommanderRuntimeTests(unittest.TestCase):
         fake.Time=ns(now=lambda:0)
         fake.loginfo=lambda *args:None;fake.logwarn=lambda *args:None
         fake.logerr=lambda *args:None
+        fake.Subscriber=lambda topic,cls,callback,**kwargs:self.callbacks.update({topic:callback})
+        fake.wait_for_service=lambda *args,**kwargs:None
+        fake.ServiceProxy=lambda name,cls:lambda **kwargs:self.service_calls.append((name,kwargs)) or ns(mode_sent=True,success=True)
+        fake.ROSException=RuntimeError;fake.ServiceException=RuntimeError
         def publisher(topic,*args,**kwargs):
             return ns(publish=lambda msg:self.commands.append(msg) if topic=='/uav/command/trajectory' else None)
         fake.Publisher=publisher
         class Box:
             lock=threading.RLock()
+            def __init__(box):
+                box.data={};self.box=box
             def subscribe(box,*args):pass
             def get(box,key,timeout):return self.data.get(key)
         runtime=types.ModuleType('uav_core.runtime'); runtime.Inbox=Box
@@ -43,7 +49,7 @@ class CommanderRuntimeTests(unittest.TestCase):
         def pose():return ns(header=ns(),pose=ns(position=ns(),orientation=ns()))
         for name, attrs in {'geometry_msgs.msg':{'PoseStamped':pose},'nav_msgs.msg':{'Odometry':ns},
                             'std_msgs.msg':{'String':lambda text:text},
-                            'mavros_msgs.msg':{'State':ns,'ExtendedState':ns},
+                            'mavros_msgs.msg':{'State':ns,'ExtendedState':ns,'Mavlink':ns(FRAMING_OK=1)},
                             'mavros_msgs.srv':{'SetMode':ns,'CommandBool':ns},
                             'uav_system.msg':{'SystemStatus':ns}}.items():
             module=types.ModuleType(name)
@@ -99,3 +105,58 @@ class CommanderRuntimeTests(unittest.TestCase):
         self.m.enter('PRESTREAM',0)
         self.data['local'].pose.pose.position.z=float('nan');self.tick()
         self.assertEqual(self.m.state,'ABORTED');self.assertEqual(self.commands,[])
+
+    def test_disconnect_between_ticks_latches_and_cancels_waiting_service(self):
+        self.m.enter('PRESTREAM',0);self.data['fcu'].armed=False
+        self.clock=3;self.tick();self.assertEqual(len(self.threads),1)
+        callback=self.callbacks['/mavros/state']
+        callback(types.SimpleNamespace(connected=True))
+        callback(types.SimpleNamespace(connected=False))
+        callback(types.SimpleNamespace(connected=True))
+        self.threads[0]['target']()
+        self.assertEqual(self.service_calls,[])
+        self.clock=4;self.tick()
+        self.assertEqual(self.m.state,'ABORTED')
+        count=len(self.commands);self.clock=20;self.tick()
+        self.assertEqual(len(self.commands),count)
+
+    def test_boot_rollback_without_connection_loss_stops_task(self):
+        import struct
+        callback=self.callbacks['/mavlink/from']
+        for boot_ms in (100000,100):
+            payload=struct.pack('<I',boot_ms).ljust(8,b'\0')
+            callback(types.SimpleNamespace(framing_status=1,msgid=32,sysid=1,compid=1,
+                                            len=4,payload64=[struct.unpack('<Q',payload)[0]]))
+        self.m.enter('TAKEOFF',0);self.tick()
+        self.assertEqual(self.m.state,'ABORTED')
+        self.assertEqual(self.commands,[]);self.assertEqual(self.threads,[])
+
+    def test_existing_offboard_requires_a_request_and_post_request_heartbeat(self):
+        self.data['fcu'].armed=False
+        self.box.data['fcu']=(self.data['fcu'],0)
+        self.m.enter('PRESTREAM',0)
+        self.clock=3;self.tick();self.threads[0]['target']()
+        self.assertEqual(self.service_calls[0][1]['custom_mode'],'OFFBOARD')
+        self.clock=3.1;self.tick()
+        self.assertEqual(self.m.state,'WAIT_OFFBOARD')
+        self.assertEqual(len(self.threads),1)
+        self.box.data['fcu']=(self.data['fcu'],3.2)
+        self.clock=3.2;self.tick()
+        self.assertEqual(self.m.state,'WAIT_ARM')
+        self.assertEqual(len(self.threads),2)
+        self.threads[1]['target']()
+        self.assertEqual(self.service_calls[1][1],{'value':True})
+
+    def test_waiting_arm_service_is_canceled_after_boot_reset(self):
+        import struct
+        self.data['fcu'].armed=False
+        self.m.offboard_requested=True;self.m.enter('WAIT_ARM',0)
+        self.tick();self.assertEqual(len(self.threads),1)
+        callback=self.callbacks['/mavlink/from']
+        for boot_ms in (100000,100):
+            payload=struct.pack('<I',boot_ms).ljust(8,b'\0')
+            callback(types.SimpleNamespace(framing_status=1,msgid=32,sysid=1,compid=1,
+                                            len=4,payload64=[struct.unpack('<Q',payload)[0]]))
+        self.threads[0]['target']()
+        self.assertEqual(self.service_calls,[])
+        self.clock=1;self.tick();self.assertEqual(self.m.state,'ABORTED')

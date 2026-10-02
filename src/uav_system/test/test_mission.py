@@ -9,8 +9,8 @@ class MissionTests(unittest.TestCase):
         self.cfg=yaml.safe_load((ROOT/'config/commander.yaml').read_text())
         self.cfg['auto_arm']=True
         self.m=Mission(self.cfg);self.fcu=(True,False,'POSCTL');self.local=(0,0,0,0)
-    def step(self,t,ready=True,session='s',landed=1,result=None,pending=False):
-        return self.m.step(t,ready,session,self.fcu,self.local,landed,result,pending)
+    def step(self,t,ready=True,session='s',landed=1,result=None,pending=False,confirmed=True):
+        return self.m.step(t,ready,session,self.fcu,self.local,landed,result,pending,confirmed)
     def reach_arm(self):
         self.step(0);self.step(2);self.step(4.6)
         self.fcu=(True,False,'OFFBOARD');self.step(4.7,result=('OFFBOARD',True))
@@ -75,14 +75,15 @@ class MissionTests(unittest.TestCase):
                 for early_offboard in (False, True):
                     with self.subTest(auto=auto, arm_time=arm_time, early_offboard=early_offboard):
                         self.cfg['auto_arm']=auto; self.m=Mission(self.cfg)
-                        actions=[]; entered=None
+                        actions=[]; entered=None; offboard_requested=False
                         for t in (0, 1, 2, 3, 4.6, 4.7, 5, 5.1):
-                            mode='OFFBOARD' if early_offboard or t>=4.7 else 'POSCTL'
+                            mode='OFFBOARD' if early_offboard or offboard_requested else 'POSCTL'
                             self.fcu=(True,t>=arm_time,mode)
                             self.local=(10+t*.01,-3,2+t*.01,.7)
                             previous=self.m.state
                             cmd, action=self.step(t)
                             if action: actions.append(action)
+                            if action=='OFFBOARD': offboard_requested=True
                             if self.m.state=='TAKEOFF' and previous!='TAKEOFF':
                                 entered=t
                                 self.assertEqual(cmd,self.local)
@@ -92,7 +93,7 @@ class MissionTests(unittest.TestCase):
                                 self.assertAlmostEqual(cmd[2],self.m.hold[2]+.15*(t-entered))
                             elif previous!='WAIT_SYSTEM': self.assertEqual(cmd,self.local)
                         self.assertEqual(self.m.state,'TAKEOFF')
-                        self.assertEqual(actions.count('OFFBOARD'),0 if early_offboard else 1)
+                        self.assertEqual(actions.count('OFFBOARD'),1)
                         self.assertLessEqual(actions.count('ARM'),1)
                         if not auto or arm_time<=4.7: self.assertNotIn('ARM',actions)
 
@@ -112,13 +113,53 @@ class MissionTests(unittest.TestCase):
         self.assertEqual(self.m.state,'PRESTREAM')
 
     def test_manual_wait_has_no_timeout_and_updates_hold(self):
-        self.cfg['auto_arm']=False;self.m=Mission(self.cfg);self.reach_arm()
+        self.cfg['auto_arm']=False;self.m=Mission(self.cfg)
+        self.step(0);self.step(2)
+        self.assertEqual(self.step(4.6),(self.local,'OFFBOARD'))
+        self.fcu=(True,False,'OFFBOARD');self.step(4.7)
         for t in (5,15,1000):
             self.local=(1+t*.0001,2,3,.5)
             self.assertEqual(self.step(t),(self.local,None))
             self.assertEqual(self.m.state,'WAIT_ARM')
         self.fcu=(True,True,'OFFBOARD');self.assertEqual(self.step(1001),(self.local,None))
         self.assertEqual(self.m.state,'TAKEOFF')
+
+    def test_already_offboard_still_requests_and_requires_new_state(self):
+        self.fcu=(True,False,'OFFBOARD')
+        self.step(0);self.step(2)
+        self.assertEqual(self.step(4.6),(self.local,'OFFBOARD'))
+        self.assertEqual(self.m.state,'WAIT_OFFBOARD')
+        self.assertEqual(self.step(4.7,result=('OFFBOARD',True),confirmed=False),(self.local,None))
+        self.assertEqual(self.m.state,'WAIT_OFFBOARD')
+        self.assertEqual(self.step(4.8,confirmed=True),(self.local,'ARM'))
+        self.assertEqual(self.step(4.9),(self.local,None))
+
+    def test_initial_connection_wait_but_later_loss_latches(self):
+        self.fcu=None;self.step(0,ready=False)
+        self.assertEqual(self.m.state,'WAIT_SYSTEM')
+        self.fcu=(True,False,'POSCTL');self.step(1,ready=False)
+        self.fcu=(False,False,'POSCTL');self.assertEqual(self.step(2),(None,None))
+        self.assertEqual(self.m.state,'ABORTED')
+        self.fcu=(True,False,'OFFBOARD');self.assertEqual(self.step(20),(None,None))
+
+    def test_connection_loss_every_phase_never_rearms_after_reconnect(self):
+        for phase in ('WAIT_SYSTEM','PRESTREAM','WAIT_OFFBOARD','WAIT_ARM','TAKEOFF','HOVER',
+                      'WAIT_LAND_MODE','WAIT_LAND','WAIT_DISARM','ABORT_LAND_MODE','ABORT_LAND'):
+            with self.subTest(phase=phase):
+                self.m=Mission(self.cfg);self.fcu=(True,False,'OFFBOARD')
+                self.step(0,ready=False);self.m.enter(phase,1)
+                self.fcu=None;self.assertEqual(self.step(2),(None,None))
+                self.assertEqual(self.m.state,'ABORTED')
+                self.fcu=(True,False,'OFFBOARD')
+                self.assertEqual(self.step(100),(None,None))
+
+    def test_manual_arm_health_failure_never_requests_offboard(self):
+        self.cfg['auto_arm']=False;self.m=Mission(self.cfg)
+        self.step(0);self.step(2);self.step(4.6)
+        self.fcu=(True,True,'POSCTL')
+        self.assertEqual(self.step(5,ready=False),(None,None))
+        self.assertEqual(self.m.state,'ABORTED')
+        self.assertEqual(self.step(6),(None,None))
 
     def test_preparation_faults_stop_without_landing_or_resume(self):
         for phase in ('PRESTREAM','WAIT_OFFBOARD','WAIT_ARM'):

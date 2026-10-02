@@ -1,4 +1,6 @@
-auto_arm: false
+auto_arm: true
+fcu_system_id: 1
+fcu_component_id: 1
 rate_hz: 30.0
 height: 0.5
 climb_rate: 0.15

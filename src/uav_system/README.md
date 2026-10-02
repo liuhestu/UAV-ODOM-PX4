@@ -65,7 +65,7 @@ source devel/setup.bash
 
 ## 两终端入口
 
-完成 [本地验证](docs/LOCAL_VALIDATION.md) 后的运行入口如下。启动 Commander 即代表授权该次任务；全部门控通过、实际进入 OFFBOARD 且已 ARM 后自动执行一次任务。默认等待遥控器 ARM，仍会请求 OFFBOARD、降落和落地后 DISARM。
+完成 [本地验证](docs/LOCAL_VALIDATION.md) 后的运行入口如下。启动 Commander 即代表授权该次任务；全部门控通过、实际进入 OFFBOARD 且已 ARM 后自动执行一次任务。默认由 Commander 请求 OFFBOARD 和 ARM，任务结束请求降落和落地后 DISARM。
 
 ```bash
 # 终端 1：只启动基础链，不启动 Commander。
@@ -76,17 +76,24 @@ roslaunch uav_system commander.launch
 ```
 
 默认任务：爬升 0.5 m，爬升目标速度 0.15 m/s，悬停 5 s，再请求 AUTO.LAND。
-参数在 `config/commander.yaml`，默认严格布尔值 `auto_arm: false`。遥控器可在启动前、初始化期间或就绪后 ARM；不需要额外开始开关。需要允许 Commander 请求 ARM 时显式传 `auto_arm:=true`，遥控器 ARM 模式可传 `auto_arm:=false`。此选项只控制 ARM 请求，不改变降落及落地后的 DISARM。
+参数在 `config/commander.yaml`，默认严格布尔值 `auto_arm: true`。不需要遥控器 ARM 或额外开始开关；全部健康门和地面确认通过、预发送完成、实际 OFFBOARD 确认后，Commander 最多请求一次 ARM。`auto_arm:=false` 仅禁止程序请求 ARM，仍等待实际 armed=true；本机 PX4 拒绝 OFFBOARD 中的遥控器 ARM，因此当前运行约定使用 true。此选项不改变降落及落地后的 DISARM，也不会修改 PX4 的遥控器 ARM/KILL 通道映射。
 
-初始化期间若已 ARM 但缺少鲜活 ON_GROUND 确认，Commander 持续等待，不发布设定点或请求模式。连续就绪窗口通过后开始预发送，每轮使用鲜活 PX4 local 位姿保持地面位置；预发送完成、实际 OFFBOARD/ARM、地面确认和所有检查通过时固定起飞基准，当轮仍保持地面目标，随后限速爬升。遥控器 ARM 等待没有 8 秒超时；自动 ARM 的请求与实际状态确认仍有超时。服务成功不能代替 FCU 状态确认。
+当前实机运行约定为程序控制任务、遥控器仅保留 KILL；用户自行通过 QGC 关闭遥控器 ARM。程序在任务控制阶段使用 OFFBOARD，不请求 POSCTL/MANUAL、不在结束时恢复手动模式。既有 AUTO.LAND 降落及 PX4 失效保护保持。OFFBOARD 依赖持续目标流，启动程序或修改 auto_arm 不保证飞控从开机到关机始终处于 OFFBOARD；实际退出/终止后不得自动抢回模式。
+
+初始化期间若已 ARM 但缺少鲜活 ON_GROUND 确认，Commander 持续等待，不发布设定点或请求模式。连续就绪窗口通过后开始预发送，每轮使用鲜活 PX4 local 位姿保持地面位置。每次 Commander 启动，预发送完成后均主动请求一次 OFFBOARD，即使此前状态已显示 OFFBOARD。必须收到本次请求发出之后的新 `/mavros/state` 且 mode=OFFBOARD，才允许自动 ARM；服务成功或请求前缓存的模式不能替代确认。预发送完成、实际 OFFBOARD/ARM、地面确认和所有检查通过时固定起飞基准，当轮仍保持地面目标，随后限速爬升。自动 ARM 请求与实际状态确认仍有超时；禁用自动 ARM 后等待实际解锁没有 8 秒超时。
+
+首次连接建立后，断连或遥测超时即终止本次任务。Commander 还观察目标 FCU 的 MAVLink 启动时钟回退以识别重启，并锁定终止；即使重连、模式恢复或健康恢复，也不自动解锁/续飞。等待服务的线程在发送前重新检查终止、连接和门控状态，取消尚未发送的旧请求。`fcu_system_id/fcu_component_id` 必须匹配实际 FCU，默认 1/1。
+
+遥控器 ARM 可使电机进入 PX4 怠速，即使 Commander 未启动或 system_ready=false。上述门控控制 Commander 的任务动作，不能阻止 PX4 独立接受遥控器解锁。KILL 保留飞控原有行为。未解锁且已处于 OFFBOARD 时，Commander 不自动抢回手动模式；需先处理模式条件。
 
 准备阶段发生健康/通信/local/session 故障、地面确认丢失、非预期模式变化或请求超时会锁定终止；起飞前不自动接管降落。从首次观察到鲜活 ARM 后，主动上锁也会终止本次任务。终止后不恢复、不重复任务、不抢回模式。
 
 迁移：旧 YAML `arm_method: auto/manual` 或旧启动参数 `arm_method:=auto/manual` 仍映射为 `auto_arm=true/false`，启动时输出弃用警告。旧启动参数可覆盖新版 YAML 默认值。禁止同一 YAML 同时定义新旧键、同时传新旧启动参数，以及旧 YAML 配合显式新启动参数。`auto_arm` YAML 仅接受布尔类型，启动参数仅接受 `true/false`；未传参数时使用 YAML 值，无键时默认 false。可用 `config:=/absolute/path/to/commander.yaml` 选择配置。
 Commander 等待带时间戳的 `/uav/system/status`，不会依赖可能滞后的单个 Bool。
 
-OpenVINS/NOKOV 配置里的单位外参和世界轴对齐默认**未验证**，因此 `arm_ready=false`。
-完成实际标定与坐标验证后填写 YAML；未标定状态仍能做里程计地面链路验证。
+当前 OpenVINS 配置按用户确认设置 `extrinsic.calibrated: true`、`world_alignment.verified: true`；这两个标志是人工确认，不是程序自动标定结论，也不替代其余实时健康门或 PX4 自身解锁检查。NOKOV 模板仍未验证。源配置在启动时读取，修改后需重启 system 才生效。
+Supervisor 首次检查及任何检查结果变化时，逐项打印 `[PASS]`/`[FAIL]`、ready/arm_ready 汇总，以及定位源、适配器和 reset 故障详情；结果不变时不反复刷屏。日志包括地面确认（Commander 的额外条件），但不会把这项混入原有 ready 定义。可在 launch 终端或 `/rosout` 中查看；`/uav/system/status.reasons` 保持列出未通过项。
+按当前用户指定的核心范围，PX4 汇总 system_status 和 SYS_STATUS 传感器位图仅作诊断，日志注明 diagnostic only，其异常不单独阻止 ready/arm_ready。定位源/适配器、鲜活有效的 canonical/PX4 local 位姿、EV 发布/实际融合、估计器有效性、通信、地面遥测及 session/reset 锁定仍强制检查；Commander 保持起飞前 ON_GROUND、实际 OFFBOARD/ARM 确认和飞控重启/断连不续飞。PX4 自身飞行前与 ARM 检查未修改。
 
 ## 通用定位源配置
 

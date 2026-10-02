@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """PX4 single-EKF listener observer through MAVROS SERIAL_CONTROL.
 
-Only four fixed read-only listener commands are permitted. Unsupported firmware,
+Only five fixed read-only listener commands are permitted. Unsupported firmware,
 missing output, multi-EKF, shell interference, or stale fields -> no evidence.
 No new serial connection, parameter writes, arming, or mode commands.
 """
@@ -13,7 +13,8 @@ import rospy
 from mavros_msgs.msg import Mavlink, State
 from mavros_msgs.srv import ParamGet
 from uav_system.msg import SourceStatus, EvStatus
-from uav_core.evidence import TOPICS, parse_listener, evaluate_listener
+from uav_core.evidence import (TOPICS, SINGLE_EKF_PARAMETERS, parse_listener,
+                               evaluate_listener, verify_single_ekf_parameters)
 from uav_core.mavlink_serial import encode
 from uav_core.runtime import Inbox
 
@@ -49,10 +50,13 @@ def main():
     def verify_single_ekf():
         rospy.wait_for_service('/mavros/param/get',timeout=1)
         get=rospy.ServiceProxy('/mavros/param/get',ParamGet)
-        for name in ('EKF2_MULTI_IMU','EKF2_MULTI_MAG'):
+        parameters={}
+        for name in SINGLE_EKF_PARAMETERS:
             reply=get(param_id=name)
-            if not reply.success or reply.value.integer!=0:
-                raise ValueError('observer requires single EKF: '+name+' == 0')
+            if not reply.success:
+                raise ValueError('single EKF parameter unavailable: '+name)
+            parameters[name]=reply.value.integer
+        verify_single_ekf_parameters(parameters)
     def query(topic):
         with cv: received['text']=''
         send('listener '+topic+' -n 1 -i 0\n')
@@ -60,7 +64,8 @@ def main():
         with cv:
             while not rospy.is_shutdown() and time.monotonic()<deadline:
                 # PX4 shell prompt closes each fixed command response.
-                if re.search(r'nsh>\s*$',received['text']) and ('TOPIC:' in received['text'] or 'never published' in received['text'] or 'not found' in received['text']):
+                clean=re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', received['text'])
+                if re.search(r'nsh>\s*$',clean) and ('TOPIC:' in clean or 'never published' in clean or 'not found' in clean):
                     return parse_listener(topic,received['text'])
                 cv.wait(timeout=min(0.1,max(0,deadline-time.monotonic())))
         raise ValueError('PX4 listener timeout: '+topic)

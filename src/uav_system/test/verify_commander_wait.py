@@ -18,6 +18,7 @@ def main():
     import rosgraph
     import yaml
     from std_msgs.msg import String
+    from rosgraph_msgs.msg import Log
     from uav_system.msg import SystemStatus, SourceStatus
     from uav_core.mission import normalize_config
     logs = Path(tempfile.mkdtemp(prefix='uav_early_arm_ros_'))
@@ -49,7 +50,12 @@ def main():
             except Exception: return False
         wait_for(online)
         rospy.init_node('commander_wait_validation', anonymous=True)
-        for args, expected in (([],False), (['auto_arm:=false'],False),
+        health_reports = []
+        def received_log(msg):
+            if msg.name == '/flight_supervisor' and msg.msg.startswith('Health checks:'):
+                health_reports.append(msg.msg)
+        rospy.Subscriber('/rosout', Log, received_log, queue_size=100)
+        for args, expected in (([],True), (['auto_arm:=false'],False),
                                (['auto_arm:=true'],True), (['arm_method:=auto'],True),
                                (['arm_method:=manual'],False)):
             dumped = subprocess.check_output(['roslaunch','--dump-params','uav_system','commander.launch'] + args, text=True)
@@ -82,8 +88,11 @@ def main():
         def health(expected):
             return rospy.wait_for_message('/uav/state/health',SourceStatus,timeout=5).healthy is expected
         wait_for(lambda: health(True))
+        wait_for(lambda: any('[PASS] Source odometry fresh and healthy' in report and
+                             '[FAIL] FCU connected with fresh telemetry' in report
+                             for report in health_reports))
         status()
-        for args, expected in (([],False),(['auto_arm:=true'],True),(['arm_method:=manual'],False),(['config:=' + str(legacy)],False)):
+        for args, expected in (([],True),(['auto_arm:=false'],False),(['auto_arm:=true'],True),(['arm_method:=manual'],False),(['config:=' + str(legacy)],False)):
             commander = start('commander_' + str(len(children)), ['roslaunch','uav_system','commander.launch'] + args)
             for _ in range(4):
                 state = rospy.wait_for_message('/uav/commander/state',String,timeout=10).data
@@ -101,7 +110,7 @@ def main():
         nodes = {node for group in master.getSystemState() for _, names in group for node in names}
         assert not any('mavros' in node for node in nodes), nodes
         assert mock.poll() is None
-        print('PASS: launch defaults/overrides/conflicts, mock health, Commander WAIT_SYSTEM; logs:',logs)
+        print('PASS: launch defaults/overrides/conflicts, mock health PASS/FAIL diagnostics, Commander WAIT_SYSTEM; logs:',logs)
     finally:
         for child in reversed(children):
             if child.poll() is None: stop(child)

@@ -15,9 +15,9 @@ class ExecutorRuntimeTests(unittest.TestCase):
         self.cfg['auto_arm']=True
         self.m=Mission(self.cfg, takeoff_task(self.cfg)); self.m.session='s'; self.m.preparation_mode='OFFBOARD'
         self.m.hold=(0,0,0,0);self.m.target=self.m.hold
-        self.clock=0.;self.tick=None;self.commands=[];self.attitudes=[];self.threads=[];self.callbacks={};self.service_calls=[]
+        self.clock=0.;self.tick=None;self.commands=[];self.attitudes=[];self.states=[];self.threads=[];self.callbacks={};self.service_calls=[]
         ns=types.SimpleNamespace
-        self.data={'system':ns(ready=True,arm_ready=True,source_session_id='s'),
+        self.data={'system':ns(ready=True,arm_ready=True,source_session_id='s',reasons=[]),
                    'fcu':ns(connected=True,armed=True,mode='OFFBOARD'),
                    'extended':ns(landed_state=1),
                    'local':ns(pose=ns(pose=ns(position=ns(x=0.,y=0.,z=0.),
@@ -25,14 +25,16 @@ class ExecutorRuntimeTests(unittest.TestCase):
         fake=types.ModuleType('rospy'); fake.init_node=lambda *args:None
         fake.get_param=lambda *args:self.cfg;fake.set_param=lambda *args:None
         fake.Time=ns(now=lambda:0)
-        fake.loginfo=lambda *args:None;fake.logwarn=lambda *args:None
+        self.info_logs=[]
+        fake.loginfo=lambda message,*args:self.info_logs.append(message % args if args else message)
+        fake.logwarn=lambda *args:None
         fake.logerr=lambda *args:None
         fake.Subscriber=lambda topic,cls,callback,**kwargs:self.callbacks.update({topic:callback})
         fake.wait_for_service=lambda *args,**kwargs:None
         fake.ServiceProxy=lambda name,cls:lambda **kwargs:self.service_calls.append((name,kwargs)) or ns(mode_sent=True,success=True)
         fake.ROSException=RuntimeError;fake.ServiceException=RuntimeError
         def publisher(topic,*args,**kwargs):
-            return ns(publish=lambda msg:self.commands.append(msg) if topic=='/uav/command/trajectory' else self.attitudes.append(msg) if topic=='/uav/command/attitude' else None)
+            return ns(publish=lambda msg:self.commands.append(msg) if topic=='/uav/command/trajectory' else self.attitudes.append(msg) if topic=='/uav/command/attitude' else self.states.append(msg) if topic=='/uav/mission_executor/state' else None)
         fake.Publisher=publisher
         class Box:
             lock=threading.RLock()
@@ -105,6 +107,38 @@ class ExecutorRuntimeTests(unittest.TestCase):
         self.m.enter('PRESTREAM',0)
         self.data['local'].pose.pose.position.z=float('nan');self.tick()
         self.assertEqual(self.m.state,'ABORTED');self.assertEqual(self.commands,[])
+
+    def assert_terminal_result(self, state, expected):
+        self.m.enter(state,0)
+        for i in range(5):
+            self.clock=i*.1
+            self.tick()
+        self.assertEqual([line for line in self.info_logs if line.startswith('MISSION ')],[expected])
+        self.assertEqual(self.commands,[])
+        self.assertEqual(self.threads,[])
+
+    def test_done_reports_success_once(self):
+        self.assert_terminal_result('DONE','MISSION SUCCESSFUL')
+
+    def test_aborted_reports_failure_once(self):
+        self.assert_terminal_result('ABORTED','MISSION FAILED')
+
+    def test_blocked_reports_failure_once(self):
+        self.assert_terminal_result('BLOCKED','MISSION FAILED')
+
+    def test_taken_over_reports_failure_once(self):
+        self.assert_terminal_result('TAKEN_OVER','MISSION FAILED')
+
+    def test_wait_system_reports_latched_fault_without_flight_requests(self):
+        self.data['fcu'].armed=False
+        self.data['system'].ready=False
+        self.data['system'].arm_ready=False
+        self.data['system'].reasons=['reset fault: PX4 estimator reset; restart system']
+        self.tick()
+        self.assertIn(self.data['system'].reasons[0],self.states[-1])
+        self.assertEqual(self.m.state,'WAIT_SYSTEM')
+        self.assertEqual(self.commands,[])
+        self.assertEqual(self.threads,[])
 
     def test_disconnect_between_ticks_latches_and_cancels_waiting_service(self):
         self.m.enter('PRESTREAM',0);self.data['fcu'].armed=False

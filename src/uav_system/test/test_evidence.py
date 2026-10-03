@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 from support import ROOT
 from flight_supervisor.checks import (TOPICS, SINGLE_EKF_PARAMETERS, parse_listener,
-                               evaluate_listener, verify_single_ekf_parameters)
+                               evaluate_listener, inspect_listener, advance_reset_counter, verify_single_ekf_parameters)
 
 
 # Import the actual observer with inert ROS substitutes; main() is never called.
@@ -33,6 +33,23 @@ def sample():
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_startup_retained_counters_do_not_establish_reset_baseline(self):
+        previous=None
+        for received,fused in ((False,False),(True,False),(False,True)):
+            previous,changed=advance_reset_counter(previous,10,received,fused)
+            self.assertIsNone(previous)
+            self.assertFalse(changed)
+        previous,changed=advance_reset_counter(previous,11,True,True)
+        self.assertEqual(previous,11)
+        self.assertFalse(changed)
+
+    def test_reset_after_fusion_is_fault_even_during_fusion_loss(self):
+        for received,fused in ((True,True),(True,False),(False,False)):
+            current,changed=advance_reset_counter(11,12,received,fused)
+            self.assertEqual(current,12)
+            self.assertTrue(changed)
+        self.assertEqual(advance_reset_counter(11,11,False,False),(11,False))
+
     def test_single_ekf_sensor_voting_without_optional_mag_parameter(self):
         verify_single_ekf_parameters(dict(SINGLE_EKF_PARAMETERS))
 
@@ -69,6 +86,38 @@ class EvidenceTests(unittest.TestCase):
     def test_fresh_fused_and_reset_encoding(self):
         received,fused,reset=evaluate_listener(sample(),2)
         self.assertTrue(received);self.assertTrue(fused);self.assertEqual(reset,0x0504030201)
+    def test_later_async_status_publication_is_not_future_data(self):
+        s=sample()
+        s[TOPICS[4]]['timestamp']=s[TOPICS[3]]['timestamp']+238
+        self.assertEqual(inspect_listener(s,2)[3],[])
+        self.assertTrue(evaluate_listener(s,2)[1])
+    def test_newer_status_does_not_hide_expired_local_or_aiding_samples(self):
+        s=sample()
+        s[TOPICS[4]]['timestamp']=s[TOPICS[3]]['timestamp']+2000001
+        received,fused,_,failures=inspect_listener(s,2)
+        self.assertFalse(received)
+        self.assertFalse(fused)
+        self.assertIn('vehicle_local_position.timestamp=10010000',failures)
+        self.assertTrue(any('time_last_fuse' in failure for failure in failures))
+    def test_failure_details_distinguish_position_height_and_local_validity(self):
+        s=sample()
+        s[TOPICS[1]]['innovation_rejected']=True
+        s[TOPICS[3]]['v_z_valid']=False
+        received,fused,reset,failures=inspect_listener(s,2)
+        self.assertTrue(received)
+        self.assertFalse(fused)
+        self.assertEqual(failures,['estimator_aid_src_ev_pos.innovation_rejected=True',
+                                   'vehicle_local_position.v_z_valid=False'])
+        self.assertEqual((received,fused,reset),evaluate_listener(s,2))
+    def test_failure_details_report_height_fusion_and_stale_input(self):
+        s=sample()
+        s[TOPICS[2]]['fused']=False
+        s[TOPICS[0]]['timestamp_sample']=1
+        received,fused,_,failures=inspect_listener(s,2)
+        self.assertFalse(received)
+        self.assertFalse(fused)
+        self.assertIn('vehicle_visual_odometry.timestamp_sample=1',failures)
+        self.assertIn('estimator_aid_src_ev_hgt.fused=False',failures)
     def test_stale_rejected_other_instance_never_fused(self):
         for field,value in [('fused',False),('innovation_rejected',True),('estimator_instance',1),('time_last_fuse',1)]:
             s=sample();s[TOPICS[1]]=dict(s[TOPICS[1]]);s[TOPICS[1]][field]=value

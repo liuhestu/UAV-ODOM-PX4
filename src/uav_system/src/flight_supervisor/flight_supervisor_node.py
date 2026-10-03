@@ -6,7 +6,7 @@ from std_msgs.msg import Bool
 from mavros_msgs.msg import State, ExtendedState, EstimatorStatus, SysStatus, StatusText
 from uav_system.msg import SourceStatus, SystemStatus, EvStatus
 from uav_core.geometry import rotation
-from flight_supervisor.checks import evaluate, estimator_valid, HealthReporter
+from flight_supervisor.checks import evaluate, estimator_valid, HealthReporter, advance_reset_counter
 from uav_core.runtime import Inbox, xyz, xyzw, wall_loop
 
 
@@ -53,9 +53,11 @@ def main():
                 fault[0]='source session changed'
             if source: session[0]=source.session_id
             if ev and ev.reset_valid:
-                if reset[0] is not None and ev.reset_counter != reset[0]:
+                next_reset,changed=advance_reset_counter(reset[0],ev.reset_counter,ev.received,ev.fused)
+                if changed:
                     fault[0]='PX4 estimator reset; restart system'
-                reset[0]=ev.reset_counter
+                    rospy.logwarn('%s; reset counters %s -> %s',fault[0],reset[0],ev.reset_counter)
+                reset[0]=next_reset
             def finite(m):
                 if not m: return False
                 try:
@@ -85,6 +87,10 @@ def main():
             simulated = source.simulated if source else True
             calibrated = bool(source and source.calibrated and adapter and adapter.calibrated)
             ready, arm_ready, reasons = evaluate(gates, calibrated, simulated, p['simulation_transport'])
+            reasons=[('reset fault: '+fault[0]) if reason=='reset fault' else
+                     ('PX4 EV received/fused evidence unavailable: '+ev.detail)
+                     if reason=='PX4 EV received/fused evidence unavailable' and ev else reason
+                     for reason in reasons]
             checks = [(labels[name], passed) for name, passed in gates.items()]
             checks.extend([
                 ('Source calibration/world alignment confirmed', bool(source and source.calibrated)),

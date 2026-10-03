@@ -6,6 +6,7 @@ missing output, multi-EKF, shell interference, or stale fields -> no evidence.
 No new serial connection, parameter writes, arming, or mode commands.
 """
 import struct
+import json
 import re
 import threading
 import time
@@ -14,7 +15,7 @@ from mavros_msgs.msg import Mavlink, State
 from mavros_msgs.srv import ParamGet
 from uav_system.msg import SourceStatus, EvStatus
 from flight_supervisor.checks import (TOPICS, SINGLE_EKF_PARAMETERS, parse_listener,
-                               evaluate_listener, verify_single_ekf_parameters)
+                               inspect_listener, verify_single_ekf_parameters)
 from uav_core.runtime import Inbox
 
 
@@ -81,6 +82,8 @@ def main():
                 cv.wait(timeout=min(0.1,max(0,deadline-time.monotonic())))
         raise ValueError('PX4 listener timeout: '+topic)
     send('\n')
+    previous=None
+    previous_reset=None
     while not rospy.is_shutdown():
         start=time.monotonic(); msg=EvStatus(); msg.header.stamp=rospy.Time.now()
         try:
@@ -92,11 +95,23 @@ def main():
             samples={topic:query(topic) for topic in TOPICS}
             # Timestamp represents completion of the observation, not poll start.
             msg.header.stamp=rospy.Time.now(); msg.source_session_id=source.session_id
-            msg.received,msg.fused,msg.reset_counter=evaluate_listener(samples,p['max_px4_age'])
+            msg.received,msg.fused,msg.reset_counter,failures=inspect_listener(samples,p['max_px4_age'])
             msg.reset_valid=True
-            msg.detail='single EKF instance 0: EV position/height fusion observed'
+            msg.detail=('single EKF instance 0: '+('; '.join(failures) if failures else
+                        'EV position/height fusion observed'))
+            if previous_reset is not None and previous_reset!=msg.reset_counter:
+                rospy.logwarn('PX4 estimator reset counters changed: %s -> %s; counters=%s',
+                              previous_reset,msg.reset_counter,json.dumps(samples['vehicle_local_position'],sort_keys=True))
+            previous_reset=msg.reset_counter
         except (ValueError,KeyError,TypeError,rospy.ROSException,rospy.ServiceException) as exc:
             msg.detail=str(exc)
+        snapshot=(msg.received,msg.fused,msg.reset_valid,msg.detail)
+        if snapshot!=previous:
+            log=rospy.loginfo if msg.received and msg.fused else rospy.logwarn
+            log('PX4 EV evidence: %s',msg.detail)
+            if msg.reset_valid and not (msg.received and msg.fused):
+                rospy.logwarn('PX4 EV failed observation: %s',json.dumps(samples,sort_keys=True))
+            previous=snapshot
         pub.publish(msg)
         time.sleep(max(0.01,p['poll_seconds']-(time.monotonic()-start)))
 

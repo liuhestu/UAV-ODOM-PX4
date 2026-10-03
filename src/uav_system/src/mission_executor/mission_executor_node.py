@@ -95,7 +95,7 @@ def run(cfg, task):
             with result_lock:
                 pending['result']=(action,accepted)
         threading.Thread(target=worker,daemon=True).start()
-    previous=[None]; last_local=[None]; jump_fault=[False]
+    previous=[None]; last_local=[None]; jump_fault=[False]; result_reported=[False]
     def tick():
         with box.lock:
             if guard.fault and mission.state not in mission.TERMINAL:
@@ -144,9 +144,14 @@ def run(cfg, task):
                 assign(msg.pose.position,cmd[:3]); assign(msg.pose.orientation,[0,0,math.sin(cmd[3]/2),math.cos(cmd[3]/2)])
                 pub.publish(msg)
         text=mission.state+(': '+mission.reason if mission.reason else '')
+        if status and not ready and status.reasons and mission.state=='WAIT_SYSTEM':
+            text+='; checks: '+ '; '.join(status.reasons)
         state_pub.publish(String(text))
         if text!=previous[0]:
             rospy.loginfo('Mission Executor: %s',text); previous[0]=text
+        if mission.state in mission.TERMINAL and not result_reported[0]:
+            rospy.loginfo('MISSION SUCCESSFUL' if mission.state=='DONE' else 'MISSION FAILED')
+            result_reported[0]=True
     wall_loop(cfg['rate_hz'],tick)
 
 

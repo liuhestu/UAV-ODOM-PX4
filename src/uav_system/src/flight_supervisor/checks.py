@@ -50,6 +50,17 @@ RESETS = ('xy_reset_counter','z_reset_counter','vxy_reset_counter','vz_reset_cou
 SINGLE_EKF_PARAMETERS = {'EKF2_MULTI_IMU': 0, 'SENS_IMU_MODE': 1, 'SENS_MAG_MODE': 1}
 
 
+def advance_reset_counter(previous, current, received, fused):
+    """Establish a new system's baseline only after valid EV fusion.
+
+    Once established, any observed change is a fault, including while fusion
+    is unavailable. A failed initial observation may contain retained PX4 data.
+    """
+    if previous is None and not (received and fused):
+        return None, False
+    return current, previous is not None and current != previous
+
+
 def verify_single_ekf_parameters(parameters):
     """Require single EKF and sensor voting; never infer missing parameters.
 
@@ -81,25 +92,48 @@ def parse_listener(topic, text):
     return result
 
 
-def evaluate_listener(samples, max_age):
+def inspect_listener(samples, max_age):
+    """Evaluate the existing gates and identify each failed field."""
     vo,pos,hgt,local,flags = [samples[t] for t in TOPICS]
-    now=local['timestamp']
-    if now<=0: raise ValueError('invalid PX4 clock')
+    if local['timestamp']<=0: raise ValueError('invalid PX4 clock')
+    # Listener topics are queried sequentially and publish asynchronously.
+    # A later topic can legitimately be newer than vehicle_local_position.
+    # Use the newest publication in this observation as the shared clock;
+    # check local age too, so an old local sample cannot hide stale evidence.
+    now=max(s['timestamp'] for s in (vo,pos,hgt,local,flags))
     def fresh(t): return 0<=now-t<=max_age*1e6
-    received=fresh(vo['timestamp']) and fresh(vo['timestamp_sample'])
-    fused=all(a['fused'] is True and a['innovation_rejected'] is False and
-              a['estimator_instance']==0 and fresh(a['timestamp']) and fresh(a['time_last_fuse'])
-              for a in (pos,hgt))
-    valid=all(local[k] is True for k in ('xy_valid','z_valid','v_xy_valid','v_z_valid'))
+    failures=[]
+    def check(label, passed, value):
+        if not passed:
+            failures.append('%s=%s' % (label, value))
+        return passed
+    received=all([check('vehicle_visual_odometry.'+k, fresh(vo[k]), vo[k])
+                  for k in ('timestamp','timestamp_sample')])
+    fusion_checks=[]
+    for topic,a in zip(TOPICS[1:3],(pos,hgt)):
+        for k,passed in [('fused',a['fused'] is True),
+                         ('innovation_rejected',a['innovation_rejected'] is False),
+                         ('estimator_instance',a['estimator_instance']==0),
+                         ('timestamp',fresh(a['timestamp'])),
+                         ('time_last_fuse',fresh(a['time_last_fuse']))]:
+            fusion_checks.append(check(topic+'.'+k,passed,a[k]))
+    valid_checks=[check('vehicle_local_position.timestamp',fresh(local['timestamp']),local['timestamp'])]
+    valid=all(valid_checks+[check('vehicle_local_position.'+k,local[k] is True,local[k])
+               for k in ('xy_valid','z_valid','v_xy_valid','v_z_valid')])
     # Actual control state distinguishes external aiding from the legacy
     # CONST_POS_MODE bit, which PX4 also sets when the vehicle is at rest.
-    aiding=(fresh(flags['timestamp']) and
-            all(flags[k] is True for k in ('cs_ev_pos','cs_ev_hgt')) and
-            all(flags[k] is False for k in ('cs_fake_pos','cs_valid_fake_pos',
-                                            'cs_inertial_dead_reckoning')))
+    aiding_checks=[check('estimator_status_flags.timestamp',fresh(flags['timestamp']),flags['timestamp'])]
+    for k in ('cs_ev_pos','cs_ev_hgt','cs_fake_pos','cs_valid_fake_pos','cs_inertial_dead_reckoning'):
+        expected=k in ('cs_ev_pos','cs_ev_hgt')
+        aiding_checks.append(check('estimator_status_flags.'+k,flags[k] is expected,flags[k]))
+    aiding=all(aiding_checks)
     reset=0
     for i,k in enumerate(RESETS):
         value=int(local[k])
         if not 0<=value<=255: raise ValueError('invalid reset counter')
         reset |= value << (i*8)
-    return received, fused and valid and aiding, reset
+    return received, all(fusion_checks) and valid and aiding, reset, failures
+
+
+def evaluate_listener(samples, max_age):
+    return inspect_listener(samples, max_age)[:3]

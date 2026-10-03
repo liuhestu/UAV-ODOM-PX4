@@ -120,3 +120,37 @@ Backend 明确转发了 ARM，FCU 1/1 返回 COMMAND_ACK(command=400,result=1)�
 结束确认 connected=true、armed=false、OFFBOARD、ON_GROUND，Executor 已停止；基础系统保留运行，PID 221886 为本次记录，后续应重新核对。没有写 PX4 参数、绕过检查、重试 ARM、带桨或飞行操作。本次不证明电机响应成功。
 
 证据在 Jetson：`/tmp/uav_arm_diagnostic_system.log`、`/tmp/uav_arm_diagnostic_executor.log`、`/tmp/uav_arm_diagnostic_trace.jsonl`、`/tmp/uav_arm_diagnostic_result.json`、`/tmp/uav_arm_diagnostic_events.jsonl`、`/tmp/uav_arm_diagnostic_decoded_events.json`。事件定义 `/tmp/uav_arm_diagnostic_px4_events.json` 由仓库源码只读提取，未写入飞控。采集程序在 /tmp，不覆盖正式配置。
+
+## 校准后基础系统未就绪排查
+
+用户报告重新校准 PX4 IMU 后 uav_system.launch 启动失败。读取最新日志发现基础节点已启动，旧任务始终 WAIT_SYSTEM，随后用户 SIGINT 退出。仅重启基础系统（start_mission_executor:=false）复现；未启动 Mission、发送模式/ARM 请求或写 PX4 参数。
+
+RealSense D435i 当前枚举为 USB 2.1，驱动拒绝两路 Infrared 848×480@30 Y8 配置。8 秒订阅观察收到 1565 条 camera/imu，双目图像和 OpenVINS odom 均未收到；source healthy=false，ready/arm_ready=false，PX4 connected=true、armed=false，实际模式 AUTO.LOITER（观测值，程序未请求该模式）。因此当前未就绪的直接原因是双目图像流未启动，不能归因于 PX4 加速度计校准。保持图像配置和标定参数，需恢复相机 USB 3 连接后再验证。
+
+本轮自建诊断基础系统已发送 SIGINT 停止，避免用户重新插接后重复启动。证据：Jetson /tmp/uav_base_restart_diagnostic.log。未执行电机任务或飞行。
+
+## 初始化重置基准与融合诊断修正
+
+用户询问如何解决再次启动 Mission 持续 WAIT_SYSTEM。读取实际状态确认此前 EV received/fused 已恢复，唯一阻塞为 Supervisor 锁定的 PX4 estimator reset；用户随后已退出基础系统和任务。没有发送 ARM、模式请求或写 PX4 参数。
+
+只启动基础链（start_mission_executor:=false）复现另一项启动误判：OpenVINS 尚未初始化时 PX4 保留旧 EV/aid 时间戳，Observer 的 received/fused=false 但 reset_valid=true；Supervisor 把该观察的重置计数当基准。约 20 秒恢复融合后计数变化，被锁定为 reset fault，导致显式重启基础链仍无法就绪。改为新 Supervisor 首次 received=true 且 fused=true 时才建立计数基准；建立后即使融合丢失，任何后续计数变化仍锁定，保留会话/重启终止策略，不自动恢复任务。
+
+增加各融合检查字段的失败原因、失败快照与计数变化日志，修正 Observer 失败时仍显示“fusion observed”的描述。SystemStatus reasons 提供明确 reset 故障和 EV detail，Mission WAIT_SYSTEM 日志显示健康阻塞项。未改变健康/融合阈值、ZUPT、相机外参或 PX4 配置。
+
+115 项检查通过，4 包增量构建通过。相机已枚举为 USB 3 5000 Mbps。修正后重启基础链，45 秒静态观察中约 25 秒起 ready=true，之后约 20 秒连续保持；EV received/fused=true、重置计数稳定，实际 armed=false。未启动实机 Mission 或重复电机试验；上次 ARM 后短暂融合失效的物理或估计原因尚未确定，不能由本次启动修正宣称解决。
+
+保留本轮基础系统运行（本轮 PID 449824，仅用于记录，操作前重新核对），没有 Mission。证据：Jetson /tmp/uav_ev_diagnostics_checks.log、/tmp/uav_ev_diagnostics_build.log、/tmp/uav_ev_diagnostics_system.log、/tmp/uav_ev_diagnostics_static.json、/tmp/uav_ev_baseline_fixed_system.log、/tmp/uav_ev_baseline_fixed_static.json。未提交或推送。
+
+## 解锁后健康失效：异步观察时间比较
+
+用户再次运行任务后要求定位失效项，本轮仅读取日志、修改软件并离线验证，没有重启实机节点、ARM、切模式或写参数。最近一轮 LINK_TEST 于 01:16:51.689 开始，01:16:59.453 因 readiness lost 故障终止，保持约 7.764 秒。
+
+01:16:59.412 的观察快照中，EV position/height fused=true、innovation_rejected=false，local 四项有效性均 true，cs_ev_pos/cs_ev_hgt=true，无惯性航位推算。唯一 EV 失败字段为 estimator_status_flags.timestamp：1517581895，比先前读取的 local.timestamp=1517581657 晚 238 微秒。观察器顺序读取五个异步发布的 topic，却使用 local 时间作为所有字段上限，因此误判正常较晚的状态发布为未来数据。该误判还使依赖地面 EV 证据的旧 estimator constant-position 位处理失效，造成第二个健康 FAIL。
+
+修正为使用同一观察中最新 publication timestamp 作为比较基准，同时显式检查 local timestamp 的年龄，保留 2 秒过期限制、融合/创新/模式和所有重置门控。新增异步 238 微秒及过期 local/aiding 回归；117 项检查与 4 包增量构建通过。将实际退出快照离线重放，结果 received=true、fused=true、failures=[]。证据：Jetson /tmp/uav_ev_async_clock_checks.log、/tmp/uav_ev_async_clock_build.log、/tmp/uav_ev_async_abort_snapshot.json。
+
+更早 01:14:05 的另一轮退出日志仅 estimator validity FAIL，EV 证据为 PASS、地面判定为非 ON_GROUND，不能把所有历史终止都归因于本次时间误判；当前回放也不证明带电机运行能完成 10 秒。现有后台观察器仍加载旧代码，需要用户结束任务并重启基础系统后，新代码才生效。本轮没有自动重复实机测试。
+
+## Mission 结果 INFO
+
+按用户要求，Executor 首次进入 DONE 时记录 INFO `MISSION SUCCESSFUL`，首次进入 BLOCKED/ABORTED/TAKEN_OVER 时记录 INFO `MISSION FAILED`。独立标记保证终止后的循环不会重复输出，保留现有状态/原因日志与进程生命周期。121 项检查及 4 包增量构建通过，含四种终止结果和重复循环回归；未启动实机 Mission、ARM 或切换模式。证据：Jetson /tmp/uav_mission_result_checks.log、/tmp/uav_mission_result_build.log。下一次启动 mission_executor.launch 生效，无需重启基础系统。

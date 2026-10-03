@@ -21,6 +21,7 @@ class BackendTests(unittest.TestCase):
         fake.Publisher=lambda topic,*args,**kwargs: response(publish=lambda msg:self.published.setdefault(topic,[]).append(msg),get_num_connections=lambda:1)
         fake.Time=response(now=lambda:0)
         fake.logwarn_throttle=lambda *args:None
+        fake.loginfo=lambda *args:None;fake.logwarn=lambda *args:None;fake.logerr=lambda *args:None
         fake.Service=lambda name, cls, handler: self.services.update({name:handler})
         fake.wait_for_service=lambda *args, **kwargs: None
         def proxy(name, cls):

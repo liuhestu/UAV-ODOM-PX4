@@ -105,3 +105,18 @@ python3 src/uav_system/test/verify_executor_wait.py
 无桨任务最终命名为 propellerless_motor_check，任务类 PropellerlessMotorCheck；同名 Python/YAML、加载测试、隔离 ROS 检查脚本及使用示例已同步。109 项检查、4 包增量构建、只读 roslaunch --dump-params 和新任务加载/5 秒计时检查通过。证据为 `/tmp/uav_motor_check_rename_checks.log`、`/tmp/uav_motor_check_rename_build.log`、`/tmp/uav_motor_check_rename_params.yaml`、`/tmp/uav_motor_check_rename_install.log`。本轮仅重命名与软件验证，未启动实际 Executor、ARM 或写 PX4 参数；未提交/推送。
 
 默认任务统一改为 propellerless_motor_check：mission_executor.launch、uav_system.launch、节点缺省参数和 Python 加载器均一致，起飞任务必须显式指定。保留当前任务 YAML 的 duration_seconds=10.0；测试读取配置并验证完成边界，避免把任务持续时间写死为 5 秒。110 项检查及 4 包增量构建通过。软件验证日志为 `/tmp/uav_default_motor_check_checks.log`、`/tmp/uav_default_motor_check_build.log`、`/tmp/uav_default_motor_check_ros.log`。本轮未重启实际基础系统、启动实机 Mission 或写 PX4 参数。默认仍可请求 ARM，仅限卸桨。
+
+
+## 本次 ARM 拒绝诊断
+
+用户明确授权按既有卸桨场景运行一次并检查原因。新增日志区分 Executor 本地门控、Backend 本地门控、MAVROS 服务异常和 FCU ACK 返回值；原有门控及单次请求策略保持。110 项软件检查及 4 包增量构建通过，日志 `/tmp/uav_arm_diagnostic_checks.log`、`/tmp/uav_arm_diagnostic_build.log`。
+
+启动前确认没有相机/MAVROS/任务进程，发现旧崩溃 OpenVINS 留下不可达的 /ov_msckf 注册，仅清理该失效注册；这一步没有启动 Mission 或 ARM。随后从正式配置启动 OpenVINS 基础链，约 52 秒时真实 EV 融合、估计器、通信和地面门通过。启动一次 propellerless_motor_check，预发送后主动请求 OFFBOARD，收到 command=176/result=0 并确认实际 OFFBOARD，再发送一次 ARM。
+
+Backend 明确转发了 ARM，FCU 1/1 返回 COMMAND_ACK(command=400,result=1)，即 MAV_RESULT_TEMPORARILY_REJECTED；MAVROS/Backend 均记录 success=false,result=1。请求已接收，没有 ACK 超时或重试；任务 BLOCKED，未进入电机运行阶段。
+
+捕获 MAVLink EVENT，并用包内 PX4 官方事件提取脚本生成定义、匹配事件 ID，确认 check_estimator_high_accel_bias 和 commander_arm_denied_resolve_failures。轴索引 0 的偏置约 -0.379516 m/s²，大于当时测试阈值 0.300000 + 不确定度余量 0.067116 ≈ 0.367116 m/s²。相关参数为 EKF2_ABL_LIM，事件里的 0.300000 是 PX4 的测试基准，不直接等同于参数值。其他事件包括无全局位置、无任务、无地面站连接等，不把其他模式的检查或提示全部当成 OFFBOARD 解锁的阻塞。项目 ready/arm_ready=true 不代表 PX4 原生解锁检查通过。
+
+结束确认 connected=true、armed=false、OFFBOARD、ON_GROUND，Executor 已停止；基础系统保留运行，PID 221886 为本次记录，后续应重新核对。没有写 PX4 参数、绕过检查、重试 ARM、带桨或飞行操作。本次不证明电机响应成功。
+
+证据在 Jetson：`/tmp/uav_arm_diagnostic_system.log`、`/tmp/uav_arm_diagnostic_executor.log`、`/tmp/uav_arm_diagnostic_trace.jsonl`、`/tmp/uav_arm_diagnostic_result.json`、`/tmp/uav_arm_diagnostic_events.jsonl`、`/tmp/uav_arm_diagnostic_decoded_events.json`。事件定义 `/tmp/uav_arm_diagnostic_px4_events.json` 由仓库源码只读提取，未写入飞控。采集程序在 /tmp，不覆盖正式配置。

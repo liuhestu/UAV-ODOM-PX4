@@ -65,16 +65,29 @@ def main():
             ext=box.get('extended', p['telemetry_timeout'])
             valid=bool(p['output_enabled'] and transport_ok() and fcu and fcu.connected)
             if req.value and valid and fcu.armed:
+                rospy.loginfo('Backend ARM: already armed; no MAVROS request')
                 return CommandBoolResponse(success=True, result=0)
             if req.value:
                 valid = valid and eligible() and fcu.mode=='OFFBOARD' and ext and ext.landed_state==1
             else:
                 valid = valid and ext and ext.landed_state==1
-        if not valid: return CommandBoolResponse(success=False, result=1)
+            if not valid:
+                status=box.get('system', p['status_timeout'])
+                rospy.logwarn('Backend %s rejected locally: output=%s transport=%s connected=%s mode=%s landed=%s arm_ready=%s backend_output=%s reasons=%s',
+                              'ARM' if req.value else 'DISARM', p['output_enabled'], transport_ok(),
+                              bool(fcu and fcu.connected), getattr(fcu,'mode',None),
+                              getattr(ext,'landed_state',None), getattr(status,'arm_ready',None),
+                              getattr(status,'backend_output_enabled',None), getattr(status,'reasons',None))
+                return CommandBoolResponse(success=False, result=1)
         try:
             rospy.wait_for_service('/mavros/cmd/arming', timeout=1)
-            return rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)(value=req.value)
-        except (rospy.ROSException, rospy.ServiceException):
+            rospy.loginfo('Backend %s: forwarding request to MAVROS', 'ARM' if req.value else 'DISARM')
+            reply=rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)(value=req.value)
+            rospy.loginfo('Backend %s: MAVROS success=%s result=%s',
+                          'ARM' if req.value else 'DISARM', reply.success, reply.result)
+            return reply
+        except (rospy.ROSException, rospy.ServiceException) as exc:
+            rospy.logerr('Backend %s: MAVROS service exception: %s', 'ARM' if req.value else 'DISARM', exc)
             return CommandBoolResponse(success=False, result=4)
     rospy.Service('/uav/backend/set_mode', SetMode, mode)
     rospy.Service('/uav/backend/arming', CommandBool, arm)

@@ -62,6 +62,8 @@ def run(cfg, task):
                               'LAND':('WAIT_LAND_MODE','ABORT_LAND_MODE'),
                               'DISARM':('WAIT_DISARM','ABORT_DISARM')}[action]
                     if guard.fault or mission.state not in expected or not fcu or not fcu.connected:
+                        rospy.logwarn('Executor %s cancelled before service call: state=%s connected=%s fault=%s',
+                                      action, mission.state, bool(fcu and fcu.connected), guard.fault)
                         with result_lock: pending['result']=(action,False)
                         return
                     if action in ('OFFBOARD','ARM'):
@@ -75,6 +77,10 @@ def run(cfg, task):
                                 return
                             valid=valid and fcu.mode=='OFFBOARD'
                         if not valid:
+                            rospy.logwarn('Executor %s rejected locally: ready=%s arm_ready=%s session_matches=%s landed=%s mode=%s',
+                                          action, getattr(status,'ready',None), getattr(status,'arm_ready',None),
+                                          bool(status and status.source_session_id==mission.session),
+                                          getattr(ext,'landed_state',None), getattr(fcu,'mode',None))
                             with result_lock: pending['result']=(action,False)
                             return
                     if action=='OFFBOARD': offboard_sent_at[0]=time.monotonic()
@@ -83,6 +89,7 @@ def run(cfg, task):
                     accepted=reply.mode_sent
                 else:
                     reply=rospy.ServiceProxy(service,CommandBool)(value=action=='ARM'); accepted=reply.success
+                    rospy.loginfo('Executor %s: Backend success=%s result=%s', action, accepted, getattr(reply,'result',None))
             except (rospy.ROSException,rospy.ServiceException) as exc:
                 rospy.logerr('%s service failed: %s',action,exc)
             with result_lock:

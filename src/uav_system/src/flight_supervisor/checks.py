@@ -25,13 +25,27 @@ class HealthReporter:
         return '\n'.join(lines)
 
 
-def estimator_valid(ekf, grounded_ev):
-    """Allow the legacy at-rest bit only with real grounded EV fusion proof."""
-    return bool(ekf and all(getattr(ekf, name, False) for name in (
+def estimator_failures(ekf, external_fusion):
+    """Disambiguate PX4's legacy constant-position bit with native EV proof.
+
+    PX4 also sets this bit for vehicle_at_rest. The observer proves real
+    aiding and rejects fake position/dead reckoning independently of landing.
+    """
+    if not ekf:
+        return ['estimator telemetry unavailable/stale']
+    failures=[name+'=False' for name in (
         'attitude_status_flag', 'pos_horiz_rel_status_flag', 'pos_vert_abs_status_flag',
-        'velocity_horiz_status_flag', 'velocity_vert_status_flag')) and
-        not ekf.accel_error_status_flag and
-        (not ekf.const_pos_mode_status_flag or grounded_ev))
+        'velocity_horiz_status_flag', 'velocity_vert_status_flag')
+        if not getattr(ekf,name,False)]
+    if ekf.accel_error_status_flag:
+        failures.append('accel_error_status_flag=True')
+    if ekf.const_pos_mode_status_flag and not external_fusion:
+        failures.append('const_pos_mode_status_flag=True without valid external fusion')
+    return failures
+
+
+def estimator_valid(ekf, external_fusion):
+    return not estimator_failures(ekf, external_fusion)
 
 
 def evaluate(gates, calibrated, simulated, simulation_transport):

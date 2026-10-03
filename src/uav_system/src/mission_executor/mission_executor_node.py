@@ -148,7 +148,8 @@ def run(cfg, task):
             text+='; checks: '+ '; '.join(status.reasons)
         state_pub.publish(String(text))
         if text!=previous[0]:
-            rospy.loginfo('Mission Executor: %s',text); previous[0]=text
+            log_text=text.replace('; checks: ','\n  Checks:\n    - ').replace('; ','\n    - ')
+            rospy.loginfo('Mission Executor: %s',log_text); previous[0]=text
         if mission.state in mission.TERMINAL and not result_reported[0]:
             rospy.loginfo('MISSION SUCCESSFUL' if mission.state=='DONE' else 'MISSION FAILED')
             result_reported[0]=True
@@ -170,7 +171,7 @@ def main():
         for key, value in loaded.executor_config.items():
             rospy.set_param('~' + key, value)
         rospy.set_param('~mission', loaded.mission_config)
-        rospy.loginfo('Mission Executor source=%s mission_config=%s executor_config=%s auto_arm=%s',
+        rospy.loginfo('Mission Executor:\n  source=%s\n  mission_config=%s\n  executor_config=%s\n  auto_arm=%s',
                       loaded.source_path, loaded.mission_config_path, loaded.executor_config_path,
                       loaded.executor_config['auto_arm'])
         run(loaded.executor_config, loaded.task)

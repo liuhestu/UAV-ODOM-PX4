@@ -6,7 +6,7 @@ from std_msgs.msg import Bool
 from mavros_msgs.msg import State, ExtendedState, EstimatorStatus, SysStatus, StatusText
 from uav_system.msg import SourceStatus, SystemStatus, EvStatus
 from uav_core.geometry import rotation
-from flight_supervisor.checks import evaluate, estimator_valid, HealthReporter, advance_reset_counter
+from flight_supervisor.checks import evaluate, estimator_failures, HealthReporter, advance_reset_counter
 from uav_core.runtime import Inbox, xyz, xyzw, wall_loop
 
 
@@ -69,7 +69,7 @@ def main():
                           (sys.sensors_enabled & required)==required and
                           (sys.sensors_health & required)==required)
             ev_fused=bool(ev and ev.received and ev.fused and source and ev.source_session_id==source.session_id)
-            grounded_ev=bool(ev_fused and extended and extended.landed_state==1)
+            ekf_failures=estimator_failures(ekf,ev_fused)
             gates = {
                 'source unavailable': bool(source and source.healthy),
                 'adapter unavailable': bool(adapter and adapter.healthy and source and adapter.session_id==source.session_id),
@@ -79,7 +79,7 @@ def main():
                 'PX4 critical/unknown status': bool(fcu and fcu.system_status in (3, 4)),
                 'PX4 sensor health unavailable/failed': health,
                 'PX4 local odometry invalid/stale': finite(local),
-                'PX4 estimator validity unavailable/failed': estimator_valid(ekf,grounded_ev),
+                'PX4 estimator validity unavailable/failed': not ekf_failures,
                 'PX4 landed-state telemetry unavailable': bool(extended and extended.landed_state!=0),
                 'PX4 EV received/fused evidence unavailable': ev_fused,
                 'reset fault': not fault[0],
@@ -88,6 +88,8 @@ def main():
             calibrated = bool(source and source.calibrated and adapter and adapter.calibrated)
             ready, arm_ready, reasons = evaluate(gates, calibrated, simulated, p['simulation_transport'])
             reasons=[('reset fault: '+fault[0]) if reason=='reset fault' else
+                     ('PX4 estimator validity unavailable/failed: '+ '; '.join(ekf_failures))
+                     if reason=='PX4 estimator validity unavailable/failed' else
                      ('PX4 EV received/fused evidence unavailable: '+ev.detail)
                      if reason=='PX4 EV received/fused evidence unavailable' and ev else reason
                      for reason in reasons]
@@ -100,10 +102,11 @@ def main():
             ])
             report = reporter.update(checks, ready, arm_ready)
             if report is not None:
-                detail = '\n  Details: source=%s; adapter=%s; reset=%s; PX4 system_status=%s' % (
+                detail = '\n  Details: source=%s; adapter=%s; reset=%s; PX4 system_status=%s; estimator=%s' % (
                     source.detail if source else 'unavailable/stale',
                     adapter.detail if adapter else 'unavailable/stale',
-                    fault[0] or 'none', fcu.system_status if fcu else 'unavailable/stale')
+                    fault[0] or 'none', fcu.system_status if fcu else 'unavailable/stale',
+                    '; '.join(ekf_failures) if ekf_failures else 'valid')
                 log = rospy.loginfo if all(passed for _, passed in checks) else rospy.logwarn
                 log('%s', report + detail)
             msg = SystemStatus(); msg.header.stamp=rospy.Time.now()

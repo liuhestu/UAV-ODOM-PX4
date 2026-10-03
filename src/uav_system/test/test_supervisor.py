@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 from support import ROOT
-from flight_supervisor.checks import evaluate, estimator_valid, HealthReporter
+from flight_supervisor.checks import evaluate, estimator_valid, estimator_failures, HealthReporter
 
 
 class SupervisorTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class SupervisorTests(unittest.TestCase):
         self.assertIn('arm_ready=True', reporter.update(ground, True, True))
         self.assertIn('[FAIL] ON_GROUND', reporter.update([('ON_GROUND', False)], True, True))
 
-    def test_grounded_external_fusion_disambiguates_constant_position_flag(self):
+    def test_real_external_fusion_disambiguates_at_rest_without_landing_dependency(self):
         flags=dict(attitude_status_flag=True,pos_horiz_rel_status_flag=True,
                    pos_vert_abs_status_flag=True,velocity_horiz_status_flag=True,
                    velocity_vert_status_flag=True,accel_error_status_flag=False,
@@ -38,6 +38,7 @@ class SupervisorTests(unittest.TestCase):
             if name=='const_pos_mode_status_flag':continue
             bad=dict(flags);bad[name]=not bad[name]
             self.assertFalse(estimator_valid(SimpleNamespace(**bad),True),name)
+            self.assertTrue(any(name in failure for failure in estimator_failures(SimpleNamespace(**bad),True)))
     def test_every_gate_required(self):
         gates={k:True for k in ('source','adapter','ev_sent','ev_received','ev_fused','ekf_valid','fcu_connected')}
         self.assertEqual(evaluate(gates,True,False,False),(True,True,[]))

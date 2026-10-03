@@ -154,3 +154,11 @@ RealSense D435i 当前枚举为 USB 2.1，驱动拒绝两路 Infrared 848×480@3
 ## Mission 结果 INFO
 
 按用户要求，Executor 首次进入 DONE 时记录 INFO `MISSION SUCCESSFUL`，首次进入 BLOCKED/ABORTED/TAKEN_OVER 时记录 INFO `MISSION FAILED`。独立标记保证终止后的循环不会重复输出，保留现有状态/原因日志与进程生命周期。121 项检查及 4 包增量构建通过，含四种终止结果和重复循环回归；未启动实机 Mission、ARM 或切换模式。证据：Jetson /tmp/uav_mission_result_checks.log、/tmp/uav_mission_result_build.log。下一次启动 mission_executor.launch 生效，无需重启基础系统。
+
+## 调试架静止估计与地面判定耦合修正
+
+用户报告 rig_attitude_hold 在 RIG_RAMP_UP 阶段失败。本次读取 01:28:05 退出窗口日志：EV 融合 PASS、local 数据 PASS、估计器有效性 FAIL，同时 ON_GROUND 为 false；约 0.2 秒估计恢复，约 0.8 秒地面确认恢复。退出前曾出现 invalid covariance 警告，但退出当轮 Adapter 已健康，不能直接认定该警告触发任务故障。旧日志未保存各 MAVROS estimator flag，故不能确认该轮唯一具体 flag。
+
+源码核对发现另一项门控耦合：PX4 ekf_helper.cpp 设置 ESTIMATOR_CONST_POS_MODE 为 fake_pos 或 valid_fake_pos 或 vehicle_at_rest；本项目先前只在 grounded_ev=true 时允许该位。静止机体的实际 EV 融合已由 Observer 确认且 fake/dead-reckoning 全部排除时，不应再用落地状态解释这个旧位。改用有效当前会话 EV 证据消除歧义，保留全部姿态/位置/速度有效性和 accel_error 门；真实融合失效仍阻塞。起飞前 ON_GROUND、调试架完成/故障后的地面确认与禁止空中 DISARM 都保留。
+
+补充 estimator_failures 字段诊断到 SystemStatus reasons 和健康日志，后续可准确区分姿态、位置、速度、加速度或 constant-position 位失败。121 项检查和 4 包增量构建通过，含有效 EV/缺失 EV、全部关键 flags 翻转以及既有地面/故障处理回归。本轮没有启动实机节点、ARM、模式切换或参数写入；需要重启基础系统加载新健康逻辑，尚未重复无桨/带桨调试架任务。不宣称此次修正已解决所有估计器异常。日志：Jetson /tmp/uav_stationary_estimator_checks.log、/tmp/uav_stationary_estimator_build.log。

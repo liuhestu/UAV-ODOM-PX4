@@ -8,12 +8,11 @@ class RigAttitudeHold:
     command_kind = 'attitude'
 
     def __init__(self, config):
-        positive(config, ('thrust', 'ramp_up_seconds', 'hold_seconds', 'ramp_down_seconds'))
+        positive(config, ('thrust', 'ramp_up_seconds', 'hold_seconds'))
         attitude_target((0,0,0,1),config['thrust'])
         self.peak_thrust = config['thrust']
         self.up = config['ramp_up_seconds']
         self.hold = config['hold_seconds']
-        self.down = config['ramp_down_seconds']
 
     def start(self, now, origin):
         self.since = now
@@ -26,13 +25,10 @@ class RigAttitudeHold:
         if elapsed < self.up:
             thrust = self.peak_thrust*elapsed/self.up
             phase = 'RIG_RAMP_UP'
-        elif elapsed < self.up+self.hold:
+        else:
             thrust = self.peak_thrust
             phase = 'RIG_HOLD'
-        else:
-            thrust = self.peak_thrust*max(0.0,1.0-(elapsed-self.up-self.hold)/self.down)
-            phase = 'RIG_RAMP_DOWN'
-        done = elapsed >= self.up+self.hold+self.down
+        done = elapsed >= self.up+self.hold
         return TaskUpdate(AttitudeCommand(self.orientation,thrust),phase,done)
 
 

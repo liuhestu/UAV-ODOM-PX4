@@ -171,7 +171,7 @@ Executor 的 ROS 循环已合入节点入口，FCU guard 已合入 execution.py�
 
 `rig_attitude_hold` 用于允许横滚/俯仰转动、固定平移的调试架。任务保持水平姿态和启动时的偏航，由 PX4 原生姿态控制器闭环；不发送位置/高度目标。实机反馈选择 `state_source:=openvins`（默认）或 `state_source:=nokov`；融合、通信和实际模式/ARM 等公共健康检查仍有效。状态源由 `uav_system.launch` 选择，任务 YAML 只定义推力包络。NOKOV 模板的外参与世界对齐需验证后才能使用。
 
-配置为 `config/mission/rig_attitude_hold.yaml`：归一化推力 `thrust: 0.10`，3 秒升推力、5 秒保持、3 秒降推力。0.10 是初始设置，不是已测定的悬停推力，不能保证足以验证回正能力。Executor 与 Backend 的 `max_attitude_thrust` 默认均为 0.30，超限目标被拒绝。
+配置为 `config/mission/rig_attitude_hold.yaml`：归一化推力 `thrust: 0.10`，3 秒升推力、5 秒保持。工作阶段结束后，Executor 的共享停止流程默认 2 秒平滑降推力、0.5 秒零推力保持，再确认地面并上锁；时长在 `config/mission_executor.yaml` 的 attitude_ramp_down_seconds/attitude_zero_thrust_seconds 配置。0.10 是初始设置，不是已测定的悬停推力，不能保证足以验证回正能力。Executor 与 Backend 的 `max_attitude_thrust` 默认均为 0.30，超限目标被拒绝。
 
 预发送及实际 OFFBOARD/ARM 确认期间只发送零推力姿态目标；实际 ARM 确认后的下一轮才开始升推力。结束后持续零推力目标，等待鲜活 ON_GROUND 后请求 DISARM；不切换 AUTO.LAND，避免位置控制器对抗机架约束。运行中健康故障则进入零推力终止流程，确认地面后上锁；地面确认超时不会强制空中上锁。人工切模式、断连、重启或主动上锁后任务锁定终止。
 

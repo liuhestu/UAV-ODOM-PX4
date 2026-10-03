@@ -4,4 +4,3 @@
 thrust: 0.10
 ramp_up_seconds: 3.0
 hold_seconds: 5.0
-ramp_down_seconds: 3.0

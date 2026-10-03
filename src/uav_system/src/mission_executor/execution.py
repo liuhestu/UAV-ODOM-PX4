@@ -3,6 +3,7 @@ import math
 from numbers import Real
 from dataclasses import dataclass
 from uav_core.validation import positive, attitude_target
+from mission_executor.shutdown import ThrustStop
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,8 @@ class ExecutionController:
         if self.command_kind=='attitude':
             attitude_target((0,0,0,1),getattr(task,'peak_thrust',None),self.max_attitude_thrust)
         self.cfg=cfg; self.state='WAIT_SYSTEM'; self.since=0; self.stable=None
+        self.thrust_stop=ThrustStop(cfg.get('attitude_ramp_down_seconds',2.0),
+                                   cfg.get('attitude_zero_thrust_seconds',0.5))
         self.session=None; self.hold=None; self.target=None; self.reason=''
         self.seen_armed=False; self.preparation_mode=None; self.arm_requested=False
         self.seen_connected=False; self.offboard_requested=False
@@ -46,7 +49,7 @@ class ExecutionController:
     def validate_update(cls, update):
         reserved=cls.TERMINAL | {'WAIT_SYSTEM','PRESTREAM','WAIT_OFFBOARD','WAIT_ARM',
                                 'WAIT_LAND_MODE','WAIT_LAND','WAIT_DISARM','ABORT_LAND_MODE','ABORT_LAND',
-                                'WAIT_GROUND','ABORT_GROUND','ABORT_DISARM'}
+                                'WAIT_GROUND','ABORT_GROUND','ABORT_DISARM','RAMP_DOWN','ZERO_THRUST'}
         if not isinstance(update,TaskUpdate) or type(update.done) is not bool:
             raise ValueError('task must return TaskUpdate with boolean done')
         if not isinstance(update.phase,str) or not update.phase.strip() or update.phase in reserved:
@@ -71,8 +74,6 @@ class ExecutionController:
             raise ValueError('task changed command kind')
         if is_attitude:
             attitude_target(update.target.orientation,update.target.thrust,self.max_attitude_thrust)
-            if update.done and update.target.thrust!=0:
-                raise ValueError('attitude task must finish with zero thrust')
         return update
 
     def stop_attitude(self, now, reason='', abort=False):
@@ -179,6 +180,14 @@ class ExecutionController:
             else: self.enter('ABORTED', now, 'system readiness lost')
             return None, action
         if preparing: self.target=self.preparation_target(local)
+        if self.state in ('RAMP_DOWN','ZERO_THRUST'):
+            thrust,phase,done=self.thrust_stop.step(now)
+            self.target=AttitudeCommand(self.target.orientation,thrust)
+            if done:
+                return self.stop_attitude(now),None
+            if phase!=self.state:
+                self.enter(phase,now)
+            return self.target,None
         command=self.target
         if service_pending: return command,None
         if self.state=='PRESTREAM':
@@ -215,13 +224,19 @@ class ExecutionController:
             if not armed:
                 self.enter('ABORTED',now,'unexpected disarm'); return None, None
             try:
+                previous_target=self.target
                 update=self.task_update(self.task.step(now,local))
                 self.target=update.target if isinstance(update.target,AttitudeCommand) else tuple(update.target); command=self.target
                 if update.phase!=self.state:
                     self.enter(update.phase,now); self.is_active=True
                 if update.done:
                     if self.command_kind=='attitude':
-                        command=self.stop_attitude(now)
+                        # Start from the last emitted thrust, even if a task's
+                        # completion update jumps directly to zero.
+                        self.target=previous_target
+                        self.thrust_stop.start(now,self.target.thrust)
+                        self.enter('RAMP_DOWN',now)
+                        command=self.target
                     else:
                         self.enter('WAIT_LAND_MODE',now); action='LAND'
             except Exception as exc:

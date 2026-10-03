@@ -76,6 +76,7 @@ config/px4.yaml                    # Backend 转发设置
 ```bash
 ./scripts/build.sh
 source devel/setup.bash
+python3 -m pip install -r src/uav_system/requirements.txt
 bash src/uav_system/scripts/run_checks.sh
 python3 src/uav_system/test/verify_executor_wait.py
 ```
@@ -365,7 +366,7 @@ PX4 的机体参考原点按参数约定为车辆重心；EKF 内部在飞控 IM
 
 `rig_attitude_hold` 实机使用 `state_source:=openvins` 或 `state_source:=nokov`，由基础 launch 选择；任务 YAML 不切换状态源。它只计算水平姿态、固定初始偏航及归一化推力升/保持/降包络，不计算高度或位置误差。指令通过 `/uav/command/attitude` → Backend → `/mavros/setpoint_raw/attitude` → PX4 姿态控制器。位置任务继续使用原 trajectory 通道；两种目标不能同时转发。四元数和推力校验、上限、MAVROS 订阅及 thrust_scaling 检查见 [包说明](../README.md#调试架姿态保持与统一-mock-入口)。
 
-姿态任务准备阶段保持零推力，完成后 WAIT_GROUND → WAIT_DISARM → DONE；故障时零推力 ABORT_GROUND → ABORT_DISARM → ABORTED，均要求鲜活地面确认才请求上锁。该任务不进入 AUTO.LAND；位置任务的降落流程保持原有行为。终止后不恢复任务。
+姿态任务准备阶段保持零推力。任务只报告工作阶段完成，正常停止由共享 `mission_executor/shutdown.py` 和执行器负责：从最后发出的推力开始 RAMP_DOWN，使用起止斜率为零的平滑曲线，随后 ZERO_THRUST，再进入 WAIT_GROUND → WAIT_DISARM → DONE。公共 `config/mission_executor.yaml` 的 attitude_ramp_down_seconds 默认 2 秒、attitude_zero_thrust_seconds 默认 0.5 秒，具体 Mission 不再配置或实现正常停桨包络。故障时立即零推力 ABORT_GROUND → ABORT_DISARM → ABORTED，均要求鲜活地面确认才请求上锁。该任务不进入 AUTO.LAND；位置任务仍由执行器请求 PX4 AUTO.LAND，不把手动推力曲线叠加到位置控制上。终止后不恢复任务。平滑的是推力指令，不是电机转速或 ESC 制动；不能据此证明自紧桨在急停或上锁时不会松脱。
 
 统一入口通过 `state_source:=mock start_mission_executor:=true mission_source:=rig_attitude_hold` 组合软件数据源和任务。mock 数据源强制禁用 MAVROS、EV Observer、Backend 输出及自动 ARM，即使显式传 true 也不会打开这些选项；因此只能观察 WAIT_SYSTEM，不能宣称电机或姿态控制验证成功。State Source Manager 根据 `config/state_sources/mock.yaml` 的 `source.nodes` 直接管理模拟节点生命周期，mock_source.launch 已删除。
 

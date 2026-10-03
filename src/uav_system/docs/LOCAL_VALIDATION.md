@@ -162,3 +162,17 @@ RealSense D435i 当前枚举为 USB 2.1，驱动拒绝两路 Infrared 848×480@3
 源码核对发现另一项门控耦合：PX4 ekf_helper.cpp 设置 ESTIMATOR_CONST_POS_MODE 为 fake_pos 或 valid_fake_pos 或 vehicle_at_rest；本项目先前只在 grounded_ev=true 时允许该位。静止机体的实际 EV 融合已由 Observer 确认且 fake/dead-reckoning 全部排除时，不应再用落地状态解释这个旧位。改用有效当前会话 EV 证据消除歧义，保留全部姿态/位置/速度有效性和 accel_error 门；真实融合失效仍阻塞。起飞前 ON_GROUND、调试架完成/故障后的地面确认与禁止空中 DISARM 都保留。
 
 补充 estimator_failures 字段诊断到 SystemStatus reasons 和健康日志，后续可准确区分姿态、位置、速度、加速度或 constant-position 位失败。121 项检查和 4 包增量构建通过，含有效 EV/缺失 EV、全部关键 flags 翻转以及既有地面/故障处理回归。本轮没有启动实机节点、ARM、模式切换或参数写入；需要重启基础系统加载新健康逻辑，尚未重复无桨/带桨调试架任务。不宣称此次修正已解决所有估计器异常。日志：Jetson /tmp/uav_stationary_estimator_checks.log、/tmp/uav_stationary_estimator_build.log。
+
+## 调试架正常停止的平滑推力与零推力保持
+
+用户提供自紧桨在急停时飞脱的既往现象，明确要求修正程序中可避免的骤降。本轮仅修改软件与配置，没有带桨、电机运行、PX4/ESC 参数写入。rig_attitude_hold 正常降推力从线性改为 smoothstep（起止斜率为零），默认时长由 3 秒延长到 5 秒；新增 zero_thrust_seconds=2.0（旧自定义配置缺省同为 2 秒），以 RIG_ZERO_THRUST 保持零推力，再交公共地面确认/DISARM 流程。默认任务包络总时长为 3+5+5+2=15 秒，不含初始化/ARM/地面确认与服务确认。
+
+失联、模式接管、KILL/主动上锁和健康故障的停止策略不增加延迟或正推力；故障仍先零推力，鲜活 ON_GROUND 后才可上锁，禁止自动恢复。位置任务维持 PX4 AUTO.LAND，不注入手动推力或改写飞控参数。
+
+122 项检查和 4 包增量构建通过。回归验证正常推力单调下降、曲线端点斜率、零推力保持时段、正常地面上锁、未知/空中地面状态不强制上锁及既有故障立即零推力。日志：Jetson /tmp/uav_rig_soft_stop_checks.log、/tmp/uav_rig_soft_stop_build.log。未实测 RPM/ESC 制动；本修改只平滑指令，不能证明实际减速率或自紧桨固定可靠性，也不能保证紧急停机不松脱。启动新 Mission 时生效，无需重启基础系统。未提交/推送。
+
+## 正常停桨移至共享执行器
+
+按用户要求替代上一节 Mission 内的 5 秒/2 秒停止实现：新增 mission_executor/shutdown.py 的 ThrustStop，由公共 ExecutionController 统一处理姿态任务正常结束。Mission 仅报告工作结束，不再配置或生成降推力/零推力保持。公共 attitude_ramp_down_seconds=2.0、attitude_zero_thrust_seconds=0.5；RAMP_DOWN 从最后实际发出的目标推力开始，采用平滑曲线，再 ZERO_THRUST，结束后进入既有地面确认/DISARM。任务即使完成时直接返回零推力也不能跳过共享下降流程。rig 默认工作 3+5 秒，共享停止 2+0.5 秒，合计约 10.5 秒，不含准备/服务/落地确认。
+
+位置任务仍由共享执行器请求 PX4 AUTO.LAND，不把姿态推力包络混入位置控制。故障、接管、断连仍立即停止，不执行延迟下降；终止不恢复。新增停止中健康失效立即零推力、接管/断连不续发、任务零推力完成不跳过下降回归；125 项检查及 4 包增量构建通过。日志 Jetson /tmp/uav_shared_shutdown_checks.log、/tmp/uav_shared_shutdown_build.log。本轮未启动实际节点、电机或写参数；新 Mission 启动生效，无需重启基础系统。软件仍不保证 ESC 制动与自紧桨机械兼容性。

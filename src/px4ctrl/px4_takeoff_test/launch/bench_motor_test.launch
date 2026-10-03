@@ -1,0 +1,30 @@
+<launch>
+  <!--
+    无桨、低推力、短时间台架测试。
+    两个确认参数默认均为 false，防止误启动电机。
+  -->
+  <arg name="confirm_propellers_removed" default="false"/>
+  <arg name="confirm_low_thrust_test" default="false"/>
+  <arg name="thrust" default="0.05"/>
+  <arg name="duration" default="2.0"/>
+  <arg name="setpoint_rate" default="50.0"/>
+  <arg name="prestream_seconds" default="2.0"/>
+  <arg name="disarm_timeout" default="5.0"/>
+  <arg name="mavros_ns" default="/mavros"/>
+
+  <node pkg="px4_takeoff_test"
+        type="bench_motor_test.py"
+        name="bench_motor_test"
+        output="screen">
+    <param name="confirm_propellers_removed"
+           value="$(arg confirm_propellers_removed)"/>
+    <param name="confirm_low_thrust_test"
+           value="$(arg confirm_low_thrust_test)"/>
+    <param name="thrust" value="$(arg thrust)"/>
+    <param name="duration" value="$(arg duration)"/>
+    <param name="setpoint_rate" value="$(arg setpoint_rate)"/>
+    <param name="prestream_seconds" value="$(arg prestream_seconds)"/>
+    <param name="disarm_timeout" value="$(arg disarm_timeout)"/>
+    <param name="mavros_ns" value="$(arg mavros_ns)"/>
+  </node>
+</launch>

@@ -1,0 +1,18 @@
+<launch>
+  <arg name="altitude" default="2.0"/>
+  <arg name="climb_rate" default="0.5"/>
+  <arg name="hover_seconds" default="10.0"/>
+  <arg name="confirm_flight" default="false"/>
+  <arg name="mavros_ns" default="/mavros"/>
+
+  <node pkg="px4_takeoff_test"
+        type="safe_takeoff.py"
+        name="safe_takeoff"
+        output="screen">
+    <param name="altitude" value="$(arg altitude)"/>
+    <param name="climb_rate" value="$(arg climb_rate)"/>
+    <param name="hover_seconds" value="$(arg hover_seconds)"/>
+    <param name="confirm_flight" value="$(arg confirm_flight)"/>
+    <param name="mavros_ns" value="$(arg mavros_ns)"/>
+  </node>
+</launch>

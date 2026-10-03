@@ -1,0 +1,53 @@
+<launch>
+  <!--
+    confirm_stationary:
+      false = 未确认机体静止，节点拒绝启动且不发布Odometry。
+      true  = 操作者确认机体已经固定并保持静止，允许进入后续检查。
+  -->
+  <arg name="confirm_stationary" default="false"/>
+
+  <!--
+    allow_armed:
+      false = 只在PX4未解锁时发布；检测到ARMED立即停止。
+      true  = PX4解锁后仍继续发布，仅限无桨台架测试。
+  -->
+  <arg name="allow_armed" default="false"/>
+
+  <!--
+    confirm_propellers_removed:
+      false = 未确认拆桨；allow_armed=true时节点拒绝启动。
+      true  = 操作者确认全部桨叶已拆除。
+    该参数不会自动检测桨叶，也不会单独请求ARM。
+  -->
+  <arg name="confirm_propellers_removed" default="false"/>
+  <arg name="output_topic" default="/mavros/odometry/out"/>
+  <arg name="state_topic" default="/mavros/state"/>
+  <arg name="frame_id" default="odom"/>
+  <arg name="child_frame_id" default="base_link"/>
+  <arg name="duration" default="30.0"/>
+  <arg name="rate" default="30.0"/>
+  <arg name="x" default="0.0"/>
+  <arg name="y" default="0.0"/>
+  <arg name="z" default="0.0"/>
+  <arg name="yaw" default="0.0"/>
+
+  <node pkg="px4_takeoff_test"
+        type="fixed_odometry_test.py"
+        name="fixed_odometry_test"
+        output="screen">
+    <param name="confirm_stationary" value="$(arg confirm_stationary)"/>
+    <param name="allow_armed" value="$(arg allow_armed)"/>
+    <param name="confirm_propellers_removed"
+           value="$(arg confirm_propellers_removed)"/>
+    <param name="output_topic" value="$(arg output_topic)"/>
+    <param name="state_topic" value="$(arg state_topic)"/>
+    <param name="frame_id" value="$(arg frame_id)"/>
+    <param name="child_frame_id" value="$(arg child_frame_id)"/>
+    <param name="duration" value="$(arg duration)"/>
+    <param name="rate" value="$(arg rate)"/>
+    <param name="x" value="$(arg x)"/>
+    <param name="y" value="$(arg y)"/>
+    <param name="z" value="$(arg z)"/>
+    <param name="yaw" value="$(arg yaw)"/>
+  </node>
+</launch>

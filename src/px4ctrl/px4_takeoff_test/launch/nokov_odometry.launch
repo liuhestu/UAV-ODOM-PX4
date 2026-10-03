@@ -1,0 +1,18 @@
+<launch>
+  <!-- 参数主要在YAML中修改；config_file允许为不同场地保存独立标定配置。 -->
+  <arg name="config_file"
+       default="$(find px4_takeoff_test)/config/nokov_odometry.yaml"/>
+  <!-- 空字符串表示使用YAML中的output_topic；非空值用于命令行临时覆盖。 -->
+  <arg name="output_topic" default=""/>
+
+  <node pkg="px4_takeoff_test"
+        type="nokov_odometry_node.py"
+        name="nokov_odometry"
+        output="screen"
+        required="true">
+    <rosparam command="load" file="$(arg config_file)"/>
+    <!-- 只有显式传入非空参数时才覆盖YAML。 -->
+    <param if="$(eval arg('output_topic') != '')"
+           name="output_topic" value="$(arg output_topic)"/>
+  </node>
+</launch>

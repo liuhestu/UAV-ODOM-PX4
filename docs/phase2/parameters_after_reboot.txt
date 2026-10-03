@@ -1,0 +1,9 @@
+PX4 firmware: v1.17.0, d6f12ad1c4000000
+Captured after rollback and PX4 reboot: 2026-09-13 Asia/Shanghai
+EKF2_EV_CTRL=0 (MAVROS readback)
+EKF2_EV_CTRL=0 (PX4 NSH readback)
+estimator_status_flags instance 0: cs_ev_pos=false, cs_ev_vel=false
+estimator_status_flags instance 1: cs_ev_pos=false, cs_ev_vel=false
+
+Safety state: connected=true, armed=false, mode=AUTO.LOITER
+Residual processes: none of MAVROS, MAVLink shell, OpenVINS, Adapter, ros2 bag play

@@ -1,0 +1,55 @@
+# NOKOV服务器（运行Seeker并向局域网发送动捕数据的电脑）IPv4地址。
+server_ip: "10.1.1.198"
+
+# 目标刚体选择方式，只能设置为"name"或"id"，一次明确使用其中一种：
+#   name：使用rigid_body_name，忽略rigid_body_id；
+#   id：使用rigid_body_id，忽略rigid_body_name。
+rigid_body_selector: "name"
+# name方式下，名称必须与NOKOV Seeker工程完全一致（区分大小写）。
+rigid_body_name: "imu1"
+# id方式下，ID必须大于或等于0；请填写Seeker中该刚体的真实ID。
+rigid_body_id: 3
+
+# ROS输出接口。px4ctrl订阅此话题时，应把run_ctrl.launch的odom_topic设成相同值。
+# 若直接作为PX4 EKF外部视觉输入，可改成/mavros/odometry/out；在此之前必须先
+# 确认坐标系、机头方向和twist表达坐标系符合当前MAVROS/PX4版本的约定。
+output_topic: "/nokov/odometry"
+frame_id: "odom"
+child_frame_id: "base_link"
+
+# NOKOV位置单位通常为mm，乘0.001转换为m。不要为了“调数值”随意改变该比例。
+position_scale: 0.001
+position_offset: [0.0, 0.0, 0.0]
+# true：首帧有效位置被当作(0,0,0)，只平移原点，不改变朝向。
+# false：发布NOKOV工程坐标系中的绝对位置。
+zero_position_at_start: false
+
+# 轴映射必须是右手系，且x/y/z各使用一次。
+# 例：[x, z, -y]表示ROS.x=NOKOV.x、ROS.y=NOKOV.z、ROS.z=-NOKOV.y。
+# 默认identity要求你已在NOKOV工程中把世界系设成ROS ENU，并正确建立刚体机体系。
+world_axis_map: [x, y, z]
+body_axis_map: [x, y, z]
+
+# 当前安装的官方Python SDK没有速度扩展字段，节点用相邻帧差分估计速度。
+# alpha=1.0几乎无延迟但噪声大；较小值更平滑但延迟更大。
+velocity_smoothing_alpha: 0.35
+minimum_dt: 0.001
+maximum_dt: 0.25
+# px4ctrl通常使用world；若下游严格按nav_msgs/Odometry标准读取twist，可选child。
+twist_linear_frame: "world"
+
+# SDK头文件只把params称为“Host defined tracking flags”，没有公开固定含义。
+# 0表示不依据该位丢帧；确认现场SDK的有效位后可设置相应掩码（部分版本用1）。
+tracking_valid_mask: 0
+# 0表示不按MeanError过滤；正数表示允许的最大SDK原始MeanError。
+max_mean_error: 0.0
+
+# 仅用于状态告警，不会插值或人为提高消息频率。
+expected_rate: 100.0
+stale_timeout: 0.5
+
+# 写入Odometry协方差的标准差。应按实际动捕标定结果修改，单位依次为m、rad、m/s、rad/s。
+position_stddev: 0.005
+orientation_stddev: 0.02
+linear_velocity_stddev: 0.05
+angular_velocity_stddev: 0.10

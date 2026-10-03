@@ -16,3 +16,5 @@ state_timeout: 0.5        # PX4 /mavros/local_position/odom 的鲜活阈值，�
 telemetry_timeout: 2.0    # Executor 接受 FCU mode/armed、连接与 landed 遥测的鲜活阈值，秒。
                          # 用于确认状态转换和任务终止；Backend 独立检查命令发送时的遥测。
 max_local_position_step: 0.5 # 相邻处理的 PX4 local 位置允许的最大变化，米；不是速度限值。
+
+max_attitude_thrust: 0.30 # Normalized attitude-command ceiling; not a universal safe thrust.

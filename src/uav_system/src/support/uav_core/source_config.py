@@ -19,6 +19,29 @@ def load_source(path):
             raise ValueError('invalid launch file')
         if not isinstance(item.get('args', {}), dict):
             raise ValueError('launch args must be a mapping')
+    nodes = cfg['source'].get('nodes', [])
+    if not isinstance(nodes, list):
+        raise ValueError('source nodes must be a list')
+    names = set()
+    for item in nodes:
+        if not isinstance(item, dict):
+            raise ValueError('source node must be a mapping')
+        for key in ('package', 'name'):
+            if not isinstance(item.get(key), str) or not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_]*', item[key]):
+                raise ValueError('invalid source node ' + key)
+        if item['name'] in names:
+            raise ValueError('duplicate source node name')
+        names.add(item['name'])
+        if not isinstance(item.get('executable'), str) or not re.fullmatch(r'[a-zA-Z0-9_][a-zA-Z0-9_.-]*', item['executable']):
+            raise ValueError('invalid source node executable')
+        params = item.get('params', {})
+        if not isinstance(params, dict):
+            raise ValueError('source node params must be a mapping')
+        for key, value in params.items():
+            if not isinstance(key, str) or not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_]*', key):
+                raise ValueError('invalid source node parameter name')
+            if type(value) not in (str, bool, int, float) or (type(value) is float and not math.isfinite(value)):
+                raise ValueError('source node parameters must be finite scalar values')
     for key in ('world_frame', 'body_frame', 'topic'):
         if not cfg['input'][key]:
             raise ValueError('input frame/topic must be explicit')

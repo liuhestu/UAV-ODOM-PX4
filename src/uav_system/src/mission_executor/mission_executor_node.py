@@ -10,11 +10,11 @@ import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 from std_msgs.msg import String
-from mavros_msgs.msg import State, ExtendedState, Mavlink
+from mavros_msgs.msg import State, ExtendedState, Mavlink, AttitudeTarget
 from mavros_msgs.srv import SetMode, CommandBool
 from uav_system.msg import SystemStatus
 from uav_core.geometry import rotation
-from mission_executor.execution import ExecutionController, FcuGuard
+from mission_executor.execution import ExecutionController, FcuGuard, AttitudeCommand
 from uav_core.runtime import Inbox, assign, xyz, xyzw, wall_loop
 
 from mission_executor.mission_loader import ExecutorLock, load_task
@@ -40,6 +40,7 @@ def run(cfg, task):
         ('/mavros/extended_state',ExtendedState,'extended'), ('/mavros/local_position/odom',Odometry,'local')]:
         box.subscribe(topic,cls,key)
     pub=rospy.Publisher('/uav/command/trajectory',PoseStamped,queue_size=1)
+    attitude_pub=rospy.Publisher('/uav/command/attitude',AttitudeTarget,queue_size=1)
     state_pub=rospy.Publisher('/uav/mission_executor/state',String,queue_size=1)
     pending={'action':None,'result':None,'start':None}
     result_lock=threading.Lock()
@@ -59,7 +60,7 @@ def run(cfg, task):
                     fcu=box.get('fcu',cfg['telemetry_timeout'])
                     expected={'OFFBOARD':('WAIT_OFFBOARD',),'ARM':('WAIT_ARM',),
                               'LAND':('WAIT_LAND_MODE','ABORT_LAND_MODE'),
-                              'DISARM':('WAIT_DISARM',)}[action]
+                              'DISARM':('WAIT_DISARM','ABORT_DISARM')}[action]
                     if guard.fault or mission.state not in expected or not fcu or not fcu.connected:
                         with result_lock: pending['result']=(action,False)
                         return
@@ -103,7 +104,11 @@ def run(cfg, task):
                     if (mission.is_active or mission.state in ('PRESTREAM','WAIT_OFFBOARD','WAIT_ARM')) and not jump_fault[0] and last_local[0] and np.linalg.norm(np.asarray(pos)-last_local[0])>cfg['max_local_position_step']:
                         jump_fault[0]=True
                         with result_lock: busy=pending['action'] is not None
-                        mission.enter('ABORT_LAND_MODE' if mission.is_active and fcu and fcu.armed and fcu.mode=='OFFBOARD' and not busy else 'ABORTED',time.monotonic(),'PX4 local position jump')
+                        can_stop=mission.is_active and fcu and fcu.armed and fcu.mode=='OFFBOARD' and not busy
+                        if can_stop and mission.command_kind=='attitude':
+                            mission.stop_attitude(time.monotonic(),'PX4 local position jump',abort=True)
+                        else:
+                            mission.enter('ABORT_LAND_MODE' if can_stop else 'ABORTED',time.monotonic(),'PX4 local position jump')
                         if mission.state=='ABORT_LAND_MODE': request('LAND')
                     last_local[0]=pos
                     local=tuple(pos)+(math.atan2(R[1,0],R[0,0]),)
@@ -120,10 +125,17 @@ def run(cfg, task):
                 bool(fcu and offboard_sent_at[0] is not None and
                      box.data['fcu'][1]>offboard_sent_at[0]))
         if action: request(action)
-        if cmd:
-            msg=PoseStamped(); msg.header.stamp=rospy.Time.now(); msg.header.frame_id='px4_local'
-            assign(msg.pose.position,cmd[:3]); assign(msg.pose.orientation,[0,0,math.sin(cmd[3]/2),math.cos(cmd[3]/2)])
-            pub.publish(msg)
+        if cmd is not None:
+            if isinstance(cmd,AttitudeCommand):
+                msg=AttitudeTarget(); msg.header.stamp=rospy.Time.now(); msg.header.frame_id='px4_local'
+                msg.type_mask=7  # Ignore all body rates; use orientation and thrust.
+                assign(msg.orientation,cmd.orientation); assign(msg.body_rate,(0.0,0.0,0.0))
+                msg.thrust=cmd.thrust
+                attitude_pub.publish(msg)
+            else:
+                msg=PoseStamped(); msg.header.stamp=rospy.Time.now(); msg.header.frame_id='px4_local'
+                assign(msg.pose.position,cmd[:3]); assign(msg.pose.orientation,[0,0,math.sin(cmd[3]/2),math.cos(cmd[3]/2)])
+                pub.publish(msg)
         text=mission.state+(': '+mission.reason if mission.reason else '')
         state_pub.publish(String(text))
         if text!=previous[0]:
@@ -138,7 +150,7 @@ def main():
         rospy.init_node('mission_executor')
         loaded = load_task(
             rospkg.RosPack().get_path('uav_system'),
-            source=rospy.get_param('~mission_source', 'takeoff_hover_land'),
+            source=rospy.get_param('~mission_source', 'propellerless_motor_check'),
             config=rospy.get_param('~mission_config', ''),
             executor_config=rospy.get_param('~executor_config', ''),
             auto_arm=rospy.get_param('~auto_arm_override', ''),

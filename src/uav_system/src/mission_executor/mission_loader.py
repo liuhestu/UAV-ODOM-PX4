@@ -80,7 +80,7 @@ def read_config(path):
     return cfg
 
 
-def load_task(package, source='takeoff_hover_land', config='', executor_config='',
+def load_task(package, source='propellerless_motor_check', config='', executor_config='',
               auto_arm='', arm_method='', warn=lambda message: None):
     package = Path(package)
     source_path = resolve_source(package, source)

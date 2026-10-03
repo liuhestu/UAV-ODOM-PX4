@@ -1,5 +1,5 @@
 <launch>
-  <arg name="mission_source" default="takeoff_hover_land" />
+  <arg name="mission_source" default="propellerless_motor_check" />
   <arg name="mission_config" default="" />
   <arg name="executor_config" default="" />
   <arg name="auto_arm" default="" />

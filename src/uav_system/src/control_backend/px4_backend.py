@@ -8,10 +8,11 @@ import tf2_ros
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
-from mavros_msgs.msg import State, ExtendedState
+from mavros_msgs.msg import State, ExtendedState, AttitudeTarget
 from mavros_msgs.srv import SetMode, SetModeResponse, CommandBool, CommandBoolResponse
 from uav_system.msg import SourceStatus, SystemStatus
 from uav_core.geometry import rotation, covariance
+from uav_core.validation import positive, attitude_target
 from uav_core.runtime import Inbox, xyz, xyzw, wall_loop
 
 
@@ -19,16 +20,20 @@ def main():
     rospy.init_node('control_backend')
     params = rospy.get_param('~')
     p = dict(params['backend']); p.update({k:v for k,v in params.items() if k not in ('backend','observer')})
+    positive(p,('max_attitude_thrust',))
+    if p['max_attitude_thrust']>1: raise ValueError('invalid max_attitude_thrust')
     box = Inbox()
     for topic, cls, key in [('/uav/state/odom', Odometry, 'odom'), ('/uav/state/health', SourceStatus, 'health'),
-        ('/uav/command/trajectory', PoseStamped, 'command'), ('/uav/system/status', SystemStatus, 'system'),
+        ('/uav/command/trajectory', PoseStamped, 'command'),
+        ('/uav/command/attitude', AttitudeTarget, 'attitude'), ('/uav/system/status', SystemStatus, 'system'),
         ('/mavros/state', State, 'fcu'), ('/mavros/extended_state', ExtendedState, 'extended')]:
         box.subscribe(topic, cls, key)
     ev_pub = rospy.Publisher('/mavros/odometry/out', Odometry, queue_size=1)
     setpoint_pub = rospy.Publisher('/mavros/setpoint_position/local', PoseStamped, queue_size=1)
+    attitude_pub = rospy.Publisher('/mavros/setpoint_raw/attitude', AttitudeTarget, queue_size=1)
     sent_pub = rospy.Publisher('/uav/backend/ev_sent', Bool, queue_size=1)
     tf_buffer = tf2_ros.Buffer(); tf_listener = tf2_ros.TransformListener(tf_buffer)
-    last_ev = [None]; last_tx = [None]; stream_start=[None]; last_stream=[None]
+    last_ev = [None]; last_tx = [None]; stream_start=[None]; last_stream=[None]; stream_kind=[None]
     def transport_ok():
         return not p['simulation_transport'] or rospy.get_param('/mavros/fcu_url', '')=='udp://:14540@127.0.0.1:14557'
     def eligible():
@@ -91,22 +96,47 @@ def main():
                     rospy.logwarn_throttle(2, '%s', exc)
             sent_pub.publish(Bool(bool(can_tx and last_tx[0] is not None and time.monotonic()-last_tx[0]<p['state_timeout'])))
             command=box.get('command', p['command_timeout'])
-            stream=False
-            if eligible() and command and command.header.frame_id=='px4_local' and fcu and fcu.connected:
+            attitude=box.get('attitude', p['command_timeout'])
+            stream=False; kind=None
+            # Never choose between two simultaneous command sources.
+            if command and attitude:
+                rospy.logwarn_throttle(2,'conflicting position/attitude commands; output stopped')
+            stopping=bool(p['output_enabled'] and transport_ok() and attitude and attitude.thrust==0 and
+                          fcu and fcu.connected and fcu.armed and fcu.mode=='OFFBOARD')
+            if (eligible() or stopping) and fcu and fcu.connected and not (command and attitude):
                 try:
-                    rotation(xyzw(command.pose.orientation))
-                    if not np.isfinite(xyz(command.pose.position)).all(): raise ValueError('nonfinite command')
-                    output=copy.deepcopy(command)
-                    # MAVROS setpoint_position interprets numeric coordinates as local ENU.
-                    output.header.frame_id='map'; output.header.stamp=rospy.Time.now()
-                    setpoint_pub.publish(output); stream=True
-                except ValueError: pass
+                    if attitude:
+                        if attitude.header.frame_id!='px4_local' or attitude.type_mask!=7:
+                            raise ValueError('invalid attitude command frame or mask')
+                        attitude_target(xyzw(attitude.orientation),attitude.thrust,p['max_attitude_thrust'])
+                        if not np.isfinite(xyz(attitude.body_rate)).all() or any(xyz(attitude.body_rate)):
+                            raise ValueError('body rates must be zero and ignored')
+                        scaling=rospy.get_param('/mavros/setpoint_raw/thrust_scaling',None)
+                        if type(scaling) not in (int,float) or scaling!=1.0:
+                            raise ValueError('attitude output requires MAVROS thrust_scaling=1.0')
+                        if not fcu.armed and attitude.thrust!=0:
+                            raise ValueError('positive attitude thrust before ARM')
+                        if attitude.thrust>0 and fcu.mode!='OFFBOARD':
+                            raise ValueError('attitude command after mode takeover')
+                        if attitude_pub.get_num_connections()>0:
+                            output=copy.deepcopy(attitude); output.header.stamp=rospy.Time.now()
+                            output.header.frame_id='map'
+                            attitude_pub.publish(output); stream=True; kind='attitude'
+                    elif command and command.header.frame_id=='px4_local':
+                        rotation(xyzw(command.pose.orientation))
+                        if not np.isfinite(xyz(command.pose.position)).all(): raise ValueError('nonfinite command')
+                        output=copy.deepcopy(command)
+                        # MAVROS interprets position as local ENU.
+                        output.header.frame_id='map'; output.header.stamp=rospy.Time.now()
+                        setpoint_pub.publish(output); stream=True; kind='position'
+                except ValueError as exc:
+                    rospy.logwarn_throttle(2,'%s',exc)
             now=time.monotonic()
             if stream:
-                if last_stream[0] is None or now-last_stream[0]>0.2: stream_start[0]=now
-                last_stream[0]=now
+                if last_stream[0] is None or now-last_stream[0]>0.2 or kind!=stream_kind[0]: stream_start[0]=now
+                last_stream[0]=now; stream_kind[0]=kind
             else:
-                stream_start[0]=None; last_stream[0]=None
+                stream_start[0]=None; last_stream[0]=None; stream_kind[0]=None
     wall_loop(p['rate_hz'], tick)
 
 

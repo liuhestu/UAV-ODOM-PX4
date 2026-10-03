@@ -1,5 +1,0 @@
-<launch>
-  <node pkg="uav_system" type="mock_state_source.py" name="mock_state_source" output="screen" required="true">
-    <param name="mode" value="static" />
-  </node>
-</launch>

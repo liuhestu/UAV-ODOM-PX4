@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Own one configured source launch tree. No shell commands or flight services."""
+"""Own configured source launches and direct nodes. No shell commands or flight services."""
 import fcntl
 import hashlib
 import os
 import threading
 import time
 import uuid
+import xml.etree.ElementTree as ET
 import roslaunch
 import rosnode
 import rospy
@@ -40,7 +41,9 @@ def main():
     rospy.Subscriber(cfg['input']['topic'], Odometry, received, queue_size=1)
     if start_source:
         existing = set(rosnode.get_node_names())
-        conflicts = existing.intersection(cfg['source'].get('owned_nodes', []))
+        owned_nodes = set(cfg['source'].get('owned_nodes', []))
+        owned_nodes.update('/' + item['name'] for item in cfg['source'].get('nodes', []))
+        conflicts = existing.intersection(owned_nodes)
         if conflicts:
             raise RuntimeError('source nodes already running: '+str(sorted(conflicts)))
     launch_files = []
@@ -50,11 +53,24 @@ def main():
                 for k, v in item.get('args', {}).items()]
         filename = roslaunch.rlutil.resolve_launch_arguments([item['package'], item['file']])[0]
         launch_files.append((filename, args))
+    launch_strings = []
+    nodes = cfg['source'].get('nodes', []) if start_source else []
+    if nodes:
+        tree = ET.Element('launch')
+        for item in nodes:
+            node = ET.SubElement(tree, 'node', pkg=item['package'], type=item['executable'],
+                                 name=item['name'], output='screen', required='true')
+            for key, value in item.get('params', {}).items():
+                kind = {str: 'str', bool: 'bool', int: 'int', float: 'double'}[type(value)]
+                text = str(value).lower() if type(value) is bool else str(value)
+                ET.SubElement(node, 'param', name=key, type=kind, value=text)
+        launch_strings.append(ET.tostring(tree, encoding='unicode'))
     parent = None
-    if launch_files:
+    if launch_files or launch_strings:
         launch_uuid = roslaunch.rlutil.get_or_generate_uuid(None, False)
         roslaunch.configure_logging(launch_uuid)
-        parent = roslaunch.parent.ROSLaunchParent(launch_uuid, launch_files, process_listeners=[listener])
+        parent = roslaunch.parent.ROSLaunchParent(launch_uuid, launch_files,
+                                               roslaunch_strs=launch_strings, process_listeners=[listener])
         rospy.on_shutdown(parent.shutdown)
         parent.start()
     def tick():

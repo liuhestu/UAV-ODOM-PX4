@@ -39,7 +39,7 @@ class StructureTests(unittest.TestCase):
         self.assertEqual(list((ROOT/'src').rglob('__init__.py')),
                          [ROOT/'src/support/uav_core/__init__.py'])
         self.assertEqual({p.name for p in (ROOT/'src/mission').glob('*.py')},
-                         {'hover.py','takeoff_hover_land.py'})
+                         {'propellerless_motor_check.py','rig_attitude_hold.py','takeoff_hover_land.py'})
 
     def test_supervisor_and_backend_config_ownership(self):
         backend=yaml.safe_load((ROOT/'config/px4.yaml').read_text())
@@ -59,8 +59,8 @@ class StructureTests(unittest.TestCase):
             self.assertEqual(files,[expected[name]])
 
     def test_source_schemas(self):
-        for p in (ROOT/'config').glob('*/mock.yaml'):
-            self.assertEqual(p,ROOT/'config/test/mock.yaml')
+        for p in (ROOT/'config/state_sources').glob('mock.yaml'):
+            self.assertEqual(p,ROOT/'config/state_sources/mock.yaml')
         for p in (ROOT/'config').glob('**/*.yaml'):
             if p.parent.name not in ('state_sources','test'):continue
             cfg=load_source(p)
@@ -73,8 +73,8 @@ class StructureTests(unittest.TestCase):
             elif p.stem!='mock':
                 self.assertFalse(cfg['extrinsic']['calibrated'])
         self.assertFalse((ROOT/'config/sources').exists())
-        self.assertFalse((ROOT/'config/state_sources/mock.yaml').exists())
-        self.assertTrue((ROOT/'config/test/mock.yaml').is_file())
+        self.assertFalse((ROOT/'config/test').exists())
+        self.assertTrue((ROOT/'config/state_sources/mock.yaml').is_file())
     def test_all_native_python_parses(self):
         ast.parse((ROOT/'setup.py').read_text(),filename=str(ROOT/'setup.py'))
         for d in ('support/uav_core','state_source_manager','state_adapter','flight_supervisor','control_backend','mission','mission_executor'):

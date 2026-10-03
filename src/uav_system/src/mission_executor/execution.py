@@ -2,13 +2,20 @@
 import math
 from numbers import Real
 from dataclasses import dataclass
-from uav_core.validation import positive
+from uav_core.validation import positive, attitude_target
+
+
+@dataclass(frozen=True)
+class AttitudeCommand:
+    """base_link FLU -> PX4 local ENU quaternion (xyzw), normalized thrust."""
+    orientation: tuple
+    thrust: float
 
 
 @dataclass(frozen=True)
 class TaskUpdate:
     """Task target, diagnostic phase and completion result; independent of ROS."""
-    target: tuple
+    target: object
     phase: str
     done: bool = False
 
@@ -17,6 +24,13 @@ class ExecutionController:
     TERMINAL = {'DONE', 'BLOCKED', 'ABORTED', 'TAKEN_OVER'}
     def __init__(self, cfg, task):
         self.task=task; self.is_active=False
+        self.command_kind=getattr(task,'command_kind','position')
+        if self.command_kind not in ('position','attitude'): raise ValueError('invalid task command_kind')
+        self.max_attitude_thrust=cfg.get('max_attitude_thrust',0.3)
+        positive({'limit':self.max_attitude_thrust},('limit',))
+        if self.max_attitude_thrust>1: raise ValueError('invalid max_attitude_thrust')
+        if self.command_kind=='attitude':
+            attitude_target((0,0,0,1),getattr(task,'peak_thrust',None),self.max_attitude_thrust)
         self.cfg=cfg; self.state='WAIT_SYSTEM'; self.since=0; self.stable=None
         self.session=None; self.hold=None; self.target=None; self.reason=''
         self.seen_armed=False; self.preparation_mode=None; self.arm_requested=False
@@ -31,14 +45,41 @@ class ExecutionController:
     @classmethod
     def validate_update(cls, update):
         reserved=cls.TERMINAL | {'WAIT_SYSTEM','PRESTREAM','WAIT_OFFBOARD','WAIT_ARM',
-                                'WAIT_LAND_MODE','WAIT_LAND','WAIT_DISARM','ABORT_LAND_MODE','ABORT_LAND'}
+                                'WAIT_LAND_MODE','WAIT_LAND','WAIT_DISARM','ABORT_LAND_MODE','ABORT_LAND',
+                                'WAIT_GROUND','ABORT_GROUND','ABORT_DISARM'}
         if not isinstance(update,TaskUpdate) or type(update.done) is not bool:
             raise ValueError('task must return TaskUpdate with boolean done')
         if not isinstance(update.phase,str) or not update.phase.strip() or update.phase in reserved:
             raise ValueError('invalid task phase')
+        if isinstance(update.target,AttitudeCommand):
+            attitude_target(update.target.orientation,update.target.thrust)
+            return update
         if len(update.target)!=4 or any((not isinstance(v,Real) or isinstance(v,bool)) or not math.isfinite(v) for v in update.target):
             raise ValueError('task target must contain four finite numbers')
         return update
+
+    def preparation_target(self, local):
+        if self.command_kind=='attitude':
+            yaw=local[3]
+            return AttitudeCommand((0.0,0.0,math.sin(yaw/2),math.cos(yaw/2)),0.0)
+        return local
+
+    def task_update(self, update):
+        update=self.validate_update(update)
+        is_attitude=isinstance(update.target,AttitudeCommand)
+        if is_attitude != (self.command_kind=='attitude'):
+            raise ValueError('task changed command kind')
+        if is_attitude:
+            attitude_target(update.target.orientation,update.target.thrust,self.max_attitude_thrust)
+            if update.done and update.target.thrust!=0:
+                raise ValueError('attitude task must finish with zero thrust')
+        return update
+
+    def stop_attitude(self, now, reason='', abort=False):
+        orientation=self.target.orientation if isinstance(self.target,AttitudeCommand) else self.preparation_target(self.hold).orientation
+        self.target=AttitudeCommand(orientation,0.0)
+        self.enter('ABORT_GROUND' if abort else 'WAIT_GROUND',now,reason)
+        return self.target
 
     def step(self, now, ready, session, fcu, local, landed, service_result=None, service_pending=False,
              offboard_confirmed=False):
@@ -54,8 +95,10 @@ class ExecutionController:
         if connected and armed:
             self.seen_armed=True
         elif connected and self.seen_armed and not armed:
-            if self.state in ('WAIT_LAND_MODE','WAIT_LAND','WAIT_DISARM') and landed==1:
+            if self.state in ('WAIT_LAND_MODE','WAIT_LAND','WAIT_DISARM','WAIT_GROUND') and landed==1:
                 self.enter('DONE',now)
+            elif self.state in ('ABORT_GROUND','ABORT_DISARM') and landed==1:
+                self.enter('ABORTED',now,'rig stopped after fault; no automatic restart')
             else:
                 self.enter('ABORTED',now,'unexpected disarm')
             return None,None
@@ -66,14 +109,34 @@ class ExecutionController:
                 self.reason=''
                 if self.stable is None: self.stable=now
                 if now-self.stable>=self.cfg['ready_stable_seconds']:
-                    self.hold=local; self.target=local; self.preparation_mode=mode
+                    self.hold=local; self.target=self.preparation_target(local); self.preparation_mode=mode
                     self.enter('PRESTREAM', now)
             else:
                 self.stable=None
                 self.reason='waiting for fresh ON_GROUND confirmation' if landed!=1 else 'waiting for system readiness and fresh local pose'
             return command, action
+        if self.state in ('WAIT_GROUND','ABORT_GROUND','ABORT_DISARM'):
+            abort=self.state.startswith('ABORT')
+            if mode!='OFFBOARD':
+                self.enter('TAKEN_OVER',now,'pilot/FCU mode change'); return None,None
+            command=self.target  # Zero thrust; never resume a rig hold after a fault.
+            if self.state=='ABORT_DISARM':
+                if service_result and service_result[0]=='DISARM' and not service_result[1]:
+                    self.enter('ABORTED',now,'DISARM rejected; inspect PX4 report')
+                elif now-self.since>self.cfg['transition_timeout']:
+                    self.enter('ABORTED',now,'DISARM state timeout')
+            elif landed==1 and not service_pending:
+                self.enter('ABORT_DISARM' if abort else 'WAIT_DISARM',now,self.reason); action='DISARM'
+            elif now-self.since>self.cfg['landing_timeout']:
+                self.enter('ABORTED',now,'ground confirmation timeout; no airborne DISARM')
+            return (None if self.state in self.TERMINAL else command),action
+
         if self.state in ('WAIT_LAND_MODE','WAIT_LAND','WAIT_DISARM','ABORT_LAND_MODE','ABORT_LAND'):
             abort=self.state.startswith('ABORT')
+            if self.state=='WAIT_DISARM' and isinstance(self.target,AttitudeCommand):
+                if armed and mode!='OFFBOARD':
+                    self.enter('TAKEN_OVER',now,'pilot/FCU mode change'); return None,None
+                command=self.target
             if not connected:
                 self.enter('ABORTED', now, 'FCU telemetry lost; PX4 configured failsafe owns response')
             elif mode not in ('OFFBOARD','AUTO.LAND') and armed:
@@ -94,7 +157,7 @@ class ExecutionController:
                     self.enter('WAIT_DISARM', now); action='DISARM'
             elif now-self.since>self.cfg['landing_timeout']:
                 self.enter('ABORTED', now, 'landing timeout; PX4/pilot owns response')
-            return command, action
+            return (None if self.state in self.TERMINAL else command), action
         preparing=self.state in ('PRESTREAM','WAIT_OFFBOARD','WAIT_ARM')
         if preparing and landed!=1:
             self.enter('ABORTED',now,'ground confirmation lost before takeoff')
@@ -110,10 +173,12 @@ class ExecutionController:
                 self.enter('ABORTED',now,'readiness lost during service request; inspect actual FCU state')
                 return None,None
             if not preparing and connected and armed and mode=='OFFBOARD':
+                if self.command_kind=='attitude':
+                    return self.stop_attitude(now,'system readiness lost',abort=True),None
                 self.enter('ABORT_LAND_MODE', now, 'system readiness lost'); action='LAND'
             else: self.enter('ABORTED', now, 'system readiness lost')
             return None, action
-        if preparing: self.target=local
+        if preparing: self.target=self.preparation_target(local)
         command=self.target
         if service_pending: return command,None
         if self.state=='PRESTREAM':
@@ -130,11 +195,13 @@ class ExecutionController:
                     self.offboard_requested=True
                     self.enter('WAIT_OFFBOARD',now); action='OFFBOARD'
                 elif mode=='OFFBOARD':
-                    self.hold=local; self.target=local
+                    self.hold=local; self.target=self.preparation_target(local)
                     try:
-                        update=self.validate_update(self.task.start(now,local))
+                        update=self.task_update(self.task.start(now,local))
                         self.enter(update.phase,now); self.is_active=True
                     except Exception as exc:
+                        if self.command_kind=='attitude':
+                            return self.stop_attitude(now,'task failed: '+str(exc),abort=True),None
                         self.enter('ABORT_LAND_MODE',now,'task failed: '+str(exc)); action='LAND'; command=None
                 else:
                     self.enter('TAKEN_OVER',now,'OFFBOARD lost after confirmation')
@@ -148,13 +215,18 @@ class ExecutionController:
             if not armed:
                 self.enter('ABORTED',now,'unexpected disarm'); return None, None
             try:
-                update=self.validate_update(self.task.step(now,local))
-                self.target=tuple(update.target); command=self.target
+                update=self.task_update(self.task.step(now,local))
+                self.target=update.target if isinstance(update.target,AttitudeCommand) else tuple(update.target); command=self.target
                 if update.phase!=self.state:
                     self.enter(update.phase,now); self.is_active=True
                 if update.done:
-                    self.enter('WAIT_LAND_MODE',now); action='LAND'
+                    if self.command_kind=='attitude':
+                        command=self.stop_attitude(now)
+                    else:
+                        self.enter('WAIT_LAND_MODE',now); action='LAND'
             except Exception as exc:
+                if self.command_kind=='attitude':
+                    return self.stop_attitude(now,'task failed: '+str(exc),abort=True),None
                 self.enter('ABORT_LAND_MODE',now,'task failed: '+str(exc)); action='LAND'; command=None
         if self.state in self.TERMINAL: command=None
         return command, action

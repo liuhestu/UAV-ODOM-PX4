@@ -27,7 +27,7 @@ def main():
     package = Path(__file__).resolve().parents[1]
     def resolved(params):
         cfg = {key.rsplit('/',1)[-1]: value for key,value in params.items()}
-        return load_task(package,source=cfg.get('mission_source','takeoff_hover_land'),
+        return load_task(package,source=cfg.get('mission_source','propellerless_motor_check'),
                          config=cfg.get('mission_config',''),executor_config=cfg.get('executor_config',''),
                          auto_arm=cfg.get('auto_arm_override',''),
                          arm_method=cfg.get('arm_method_override','')).executor_config
@@ -71,6 +71,7 @@ def main():
             dumped = subprocess.check_output(['roslaunch','--dump-params','uav_system','mission_executor.launch'] + args, text=True)
             params = yaml.safe_load(dumped)
             assert resolved(params)['auto_arm'] is expected
+            assert params['/mission_executor/mission_source']=='propellerless_motor_check'
         dumped = subprocess.check_output(['roslaunch','--dump-params','uav_system','mission_executor.launch',
                                            'auto_arm:=false','arm_method:=auto'],text=True)
         try:
@@ -99,7 +100,7 @@ def main():
             publishers=master.getSystemState()[0]
             assert not any(topic=='/uav/command/trajectory' and '/mission_executor' in nodes
                            for topic,nodes in publishers)
-        mock = start('mock', ['roslaunch','uav_system','mock_system.launch'])
+        mock = start('mock', ['roslaunch','uav_system','uav_system.launch','state_source:=mock'])
         def status():
             msg = rospy.wait_for_message('/uav/system/status', SystemStatus, timeout=10)
             assert not msg.ready and not msg.arm_ready and not msg.backend_output_enabled
@@ -110,7 +111,7 @@ def main():
                              '[FAIL] FCU connected with fresh telemetry' in report
                              for report in health_reports))
         status()
-        for args, expected in (([],True),(['auto_arm:=false'],False),(['auto_arm:=true'],True),(['arm_method:=manual'],False),(['executor_config:=' + str(legacy)],False),(['mission_source:=hover'],True)):
+        for args, expected in (([],True),(['auto_arm:=false'],False),(['auto_arm:=true'],True),(['arm_method:=manual'],False),(['executor_config:=' + str(legacy)],False),(['mission_source:=takeoff_hover_land'],True),(['mission_source:=rig_attitude_hold'],True)):
             executor = start('executor_' + str(len(children)), ['roslaunch','uav_system','mission_executor.launch'] + args)
             for _ in range(4):
                 state = rospy.wait_for_message('/uav/mission_executor/state',String,timeout=10).data
@@ -118,9 +119,11 @@ def main():
                 status()
             assert rospy.get_param('/mission_executor/auto_arm') is expected
             task_params=rospy.get_param('/mission_executor/mission')
-            assert task_params['hover_seconds']==5.0 and 'auto_arm' not in task_params
-            if args==['mission_source:=hover']:
-                assert task_params=={'hover_seconds':5.0},task_params
+            selected = 'takeoff_hover_land' if args==['mission_source:=takeoff_hover_land'] else ('rig_attitude_hold' if args==['mission_source:=rig_attitude_hold'] else 'propellerless_motor_check')
+            expected_task = load_task(package, source=selected).mission_config
+            assert task_params==expected_task and 'auto_arm' not in task_params
+            if not args:
+                assert set(task_params)=={'duration_seconds'},task_params
             assert executor.poll() is None
             if not args:
                 duplicate = start('duplicate', ['roslaunch','uav_system','mission_executor.launch'])
@@ -135,10 +138,22 @@ def main():
             time.sleep(1)
             wait_for(lambda: health(expected))
             status()
+        stop(mock)
+        combined=start('combined_mock_rig',['roslaunch','uav_system','uav_system.launch',
+                       'state_source:=mock','start_mission_executor:=true','mission_source:=rig_attitude_hold',
+                       'start_mavros:=true','start_ev_observer:=true','output_enabled:=true','auto_arm:=true'])
+        wait_for(lambda: health(True))
+        for _ in range(4):
+            assert rospy.wait_for_message('/uav/mission_executor/state',String,timeout=10).data.startswith('WAIT_SYSTEM')
+            status()
+        assert rospy.get_param('/mission_executor/auto_arm') is False
+        assert rospy.get_param('/control_backend/output_enabled') is False
+        assert combined.poll() is None
         nodes = {node for group in master.getSystemState() for _, names in group for node in names}
         assert not any('mavros' in node for node in nodes), nodes
-        assert mock.poll() is None
-        print('PASS: launch defaults/overrides/conflicts, mock health PASS/FAIL diagnostics, both tasks WAIT_SYSTEM and duplicate rejection; logs:',logs)
+        assert '/px4_ev_observer' not in nodes, nodes
+        assert combined.poll() is None
+        print('PASS: launch defaults/overrides/conflicts, mock health PASS/FAIL diagnostics, three tasks WAIT_SYSTEM, unified mock/rig isolation and duplicate rejection; logs:',logs)
     finally:
         for child in reversed(children):
             if child.poll() is None: stop(child)

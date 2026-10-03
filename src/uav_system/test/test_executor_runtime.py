@@ -15,7 +15,7 @@ class ExecutorRuntimeTests(unittest.TestCase):
         self.cfg['auto_arm']=True
         self.m=Mission(self.cfg, takeoff_task(self.cfg)); self.m.session='s'; self.m.preparation_mode='OFFBOARD'
         self.m.hold=(0,0,0,0);self.m.target=self.m.hold
-        self.clock=0.;self.tick=None;self.commands=[];self.threads=[];self.callbacks={};self.service_calls=[]
+        self.clock=0.;self.tick=None;self.commands=[];self.attitudes=[];self.threads=[];self.callbacks={};self.service_calls=[]
         ns=types.SimpleNamespace
         self.data={'system':ns(ready=True,arm_ready=True,source_session_id='s'),
                    'fcu':ns(connected=True,armed=True,mode='OFFBOARD'),
@@ -32,7 +32,7 @@ class ExecutorRuntimeTests(unittest.TestCase):
         fake.ServiceProxy=lambda name,cls:lambda **kwargs:self.service_calls.append((name,kwargs)) or ns(mode_sent=True,success=True)
         fake.ROSException=RuntimeError;fake.ServiceException=RuntimeError
         def publisher(topic,*args,**kwargs):
-            return ns(publish=lambda msg:self.commands.append(msg) if topic=='/uav/command/trajectory' else None)
+            return ns(publish=lambda msg:self.commands.append(msg) if topic=='/uav/command/trajectory' else self.attitudes.append(msg) if topic=='/uav/command/attitude' else None)
         fake.Publisher=publisher
         class Box:
             lock=threading.RLock()
@@ -43,13 +43,13 @@ class ExecutorRuntimeTests(unittest.TestCase):
         runtime=types.ModuleType('uav_core.runtime'); runtime.Inbox=Box
         runtime.xyz=lambda value:[value.x,value.y,value.z]
         runtime.xyzw=lambda value:[value.x,value.y,value.z,value.w]
-        runtime.assign=lambda obj,values:None
+        runtime.assign=lambda obj,values:[setattr(obj,key,value) for key,value in zip(('x','y','z','w'),values)]
         runtime.wall_loop=lambda rate,tick:setattr(self,'tick',tick)
         modules={'rospy':fake,'uav_core.runtime':runtime}
         def pose():return ns(header=ns(),pose=ns(position=ns(),orientation=ns()))
         for name, attrs in {'geometry_msgs.msg':{'PoseStamped':pose},'nav_msgs.msg':{'Odometry':ns},
                             'std_msgs.msg':{'String':lambda text:text},
-                            'mavros_msgs.msg':{'State':ns,'ExtendedState':ns,'Mavlink':ns(FRAMING_OK=1)},
+                            'mavros_msgs.msg':{'State':ns,'ExtendedState':ns,'Mavlink':ns(FRAMING_OK=1),'AttitudeTarget':lambda:ns(header=ns(),orientation=ns(),body_rate=ns())},
                             'mavros_msgs.srv':{'SetMode':ns,'CommandBool':ns},
                             'uav_system.msg':{'SystemStatus':ns}}.items():
             module=types.ModuleType(name)
@@ -176,3 +176,23 @@ class ExecutorRuntimeTests(unittest.TestCase):
         self.data['fcu'].armed=True
         self.threads[0]['target']()
         self.assertEqual(self.service_calls,[])
+
+    def test_attitude_task_uses_one_stream_with_zero_thrust_before_arm(self):
+        from mission_executor.mission_loader import load_task
+        loaded=load_task(ROOT,'rig_attitude_hold')
+        self.m.task=loaded.task;self.m.command_kind='attitude'
+        self.m.enter('PRESTREAM',0);self.data['fcu'].armed=False
+        self.tick()
+        self.assertEqual(self.commands,[]);self.assertEqual(self.attitudes[-1].thrust,0.)
+        self.m.offboard_requested=True;self.m.enter('WAIT_ARM',0)
+        self.data['fcu'].armed=True;self.clock=1;self.tick()
+        self.assertEqual(self.attitudes[-1].thrust,0.)
+        self.assertEqual(self.m.state,'RIG_RAMP_UP')
+        self.clock=2;self.tick()
+        self.assertAlmostEqual(self.attitudes[-1].thrust,.1/3)
+        self.assertEqual(self.attitudes[-1].type_mask,7)
+        self.assertEqual(self.commands,[])
+        self.data['fcu'].mode='MANUAL';self.tick()
+        count=len(self.attitudes);self.clock=3;self.tick()
+        self.assertEqual(len(self.attitudes),count)
+        self.assertEqual(self.m.state,'TAKEN_OVER')

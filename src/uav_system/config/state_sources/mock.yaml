@@ -4,10 +4,13 @@
 schema_version: 1
 source:
   simulated: true
-  launches:
+  launches: []
+  nodes:
   - package: uav_system
-    file: mock_source.launch
-    args: {}
+    executable: mock_state_source.py
+    name: mock_state_source
+    params:
+      mode: static
   owned_nodes:
   - /mock_state_source
 input:

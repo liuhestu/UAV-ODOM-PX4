@@ -12,3 +12,4 @@ backend:
   telemetry_timeout: 2.0     # 接受 FCU 状态和 landed 遥测的鲜活阈值，秒；用于实际转发前的检查。
   prestream_seconds: 2.0     # 接受 OFFBOARD 请求前，实际连续向 MAVROS 转发有效目标的最短时长，秒。
                             # 不是 Executor 的准备阶段计时；目标未通过转发门或流中断时，此计时重置。
+  max_attitude_thrust: 0.30 # Final normalized thrust limit for raw attitude commands.

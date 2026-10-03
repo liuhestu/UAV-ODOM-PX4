@@ -1,0 +1,7 @@
+# State source selection belongs to the system launch, not this task YAML.
+# Roll/pitch may rotate; translation must be mechanically constrained.
+# Initial values only: 0.10 normalized thrust is not a calibrated hover throttle.
+thrust: 0.10
+ramp_up_seconds: 3.0
+hold_seconds: 5.0
+ramp_down_seconds: 3.0

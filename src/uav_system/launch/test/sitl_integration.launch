@@ -1,0 +1,10 @@
+<launch>
+  <!-- Requires a separately running PX4 SITL. No fixed mock odometry for flight. -->
+  <arg name="source_config" />
+  <arg name="start_commander" default="false" />
+  <include file="$(find uav_system)/launch/system.launch">
+    <arg name="source_config" value="$(arg source_config)" />
+    <arg name="simulation_transport" value="true" />
+  </include>
+  <include if="$(arg start_commander)" file="$(find uav_system)/launch/commander/takeoff_hover_land.launch" />
+</launch>

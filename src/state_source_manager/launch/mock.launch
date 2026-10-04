@@ -1,0 +1,5 @@
+<launch>
+  <node pkg="state_source_manager" type="mock_state_source.py" name="mock_state_source" output="screen" required="true">
+    <param name="mode" value="static" />
+  </node>
+</launch>

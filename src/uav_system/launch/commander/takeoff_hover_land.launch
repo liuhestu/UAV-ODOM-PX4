@@ -1,0 +1,7 @@
+<launch>
+  <arg name="arm_method" default="auto" />
+  <node pkg="uav_commander" type="takeoff_hover_land.py" name="takeoff_hover_land" output="screen" required="true">
+    <rosparam command="load" file="$(find uav_system)/config/commander.yaml" />
+    <param name="arm_method" value="$(arg arm_method)" />
+  </node>
+</launch>

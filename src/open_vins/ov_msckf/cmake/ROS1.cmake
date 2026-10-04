@@ -158,3 +158,9 @@ install(TARGETS test_sim_repeat
         RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
+
+# Preserve the existing ROS1 launch ../config lookup in catkin install spaces.
+if (catkin_FOUND AND ENABLE_ROS)
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../config/
+            DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/../config)
+endif ()

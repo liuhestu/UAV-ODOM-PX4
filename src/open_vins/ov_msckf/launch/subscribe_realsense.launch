@@ -1,0 +1,20 @@
+<launch>
+  <arg name="config" default="realsense" />
+  <arg name="config_path" default="$(find ov_msckf)/../config/$(arg config)/estimator_config.yaml" />
+  <arg name="start_camera" default="true" />
+  <arg name="serial_no" default="" />
+  <include if="$(arg start_camera)" file="$(find realsense2_camera)/launch/rs_camera.launch">
+    <arg name="serial_no" value="$(arg serial_no)" />
+    <arg name="enable_color" value="false" /><arg name="enable_depth" value="false" />
+    <arg name="enable_infra1" value="true" /><arg name="enable_infra2" value="true" />
+    <arg name="infra_width" value="848" /><arg name="infra_height" value="480" /><arg name="infra_fps" value="30" />
+    <arg name="enable_gyro" value="true" /><arg name="enable_accel" value="true" />
+    <arg name="gyro_fps" value="200" /><arg name="accel_fps" value="200" />
+    <arg name="unite_imu_method" value="linear_interpolation" />
+  </include>
+  <!-- ROS1 RealSense 2.x driver parameter; local validation must verify IR emitter is disabled. -->
+  <param if="$(arg start_camera)" name="/camera/stereo_module/emitter_enabled" value="0" type="int" />
+  <include file="$(find ov_msckf)/launch/subscribe.launch">
+    <arg name="config" value="$(arg config)" /><arg name="config_path" value="$(arg config_path)" />
+  </include>
+</launch>

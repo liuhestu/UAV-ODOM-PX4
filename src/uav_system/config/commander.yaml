@@ -1,0 +1,15 @@
+arm_method: auto
+rate_hz: 30.0
+height: 0.5
+climb_rate: 0.15
+height_tolerance: 0.08
+hover_seconds: 5.0
+prestream_seconds: 2.5
+ready_stable_seconds: 2.0
+transition_timeout: 8.0
+flight_timeout: 20.0
+landing_timeout: 60.0
+status_timeout: 0.5
+state_timeout: 0.5
+telemetry_timeout: 2.0
+max_local_position_step: 0.5

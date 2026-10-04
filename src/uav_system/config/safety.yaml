@@ -1,0 +1,6 @@
+state_timeout: 0.5
+telemetry_timeout: 3.0
+evidence_timeout: 6.0
+# MAV_SYS_STATUS_SENSOR: gyro (1) and accelerometer (2).
+# This is an observable prerequisite, not the full PX4 preflight verdict.
+required_sensor_mask: 3

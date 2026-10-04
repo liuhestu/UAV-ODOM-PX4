@@ -25,3 +25,8 @@ log/
 .DS_Store
 *~
 *.swp
+
+# ROS1 catkin generated output
+devel/
+.catkin_tools/
+logs/

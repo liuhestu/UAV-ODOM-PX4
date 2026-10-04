@@ -1,0 +1,19 @@
+# Companion settings only. No PX4 parameter writes.
+backend:
+  output_enabled: true
+  simulation_transport: false
+  rate_hz: 30.0
+  state_timeout: 0.3
+  command_timeout: 0.3
+  status_timeout: 0.5
+  telemetry_timeout: 2.0
+  prestream_seconds: 2.0
+observer:
+  target_system_id: 1
+  target_component_id: 1
+  sender_system_id: 245
+  sender_component_id: 191
+  source_timeout: 2.0
+  query_timeout: 1.5
+  poll_seconds: 1.0
+  max_px4_age: 2.0

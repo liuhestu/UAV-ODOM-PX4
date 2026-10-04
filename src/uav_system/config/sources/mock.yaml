@@ -1,0 +1,59 @@
+# T_SB: base_link origin/axes expressed in SOURCE body frame. Units m; Hamilton xyzw.
+# T_AW: source world -> canonical odom, both gravity-aligned Z-up.
+# Calibration/verification false blocks arming; do not mark true before physical verification.
+schema_version: 1
+source:
+  simulated: true
+  launches:
+  - package: state_source_manager
+    file: mock.launch
+    args: {}
+  owned_nodes:
+  - /mock_state_source
+input:
+  topic: /mock/odom
+  world_frame: mock_world
+  body_frame: mock_body
+  linear_velocity_frame: body
+  angular_velocity_frame: body
+  orientation_covariance_frame: world
+extrinsic:
+  calibrated: true
+  translation_xyz:
+  - 0.0
+  - 0.0
+  - 0.0
+  rotation_xyzw:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+world_alignment:
+  verified: true
+  translation_xyz:
+  - 0.0
+  - 0.0
+  - 0.0
+  rotation_xyzw:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+adapter:
+  stale_timeout: 0.3
+  max_position_step: 0.5
+  max_rotation_step_rad: 0.6
+  pose_variance_floor:
+  - 0.0001
+  - 0.0001
+  - 0.0001
+  - 0.0004
+  - 0.0004
+  - 0.0004
+  twist_variance_floor:
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001

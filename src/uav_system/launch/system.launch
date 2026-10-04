@@ -1,0 +1,34 @@
+<launch>
+  <arg name="state_source" default="openvins" />
+  <arg name="source_config" default="$(find uav_system)/config/sources/$(arg state_source).yaml" />
+  <arg name="start_mavros" default="true" />
+  <arg name="start_ev_observer" default="true" />
+  <arg name="output_enabled" default="true" />
+  <arg name="simulation_transport" default="false" />
+  <arg name="fcu_url" default="/dev/ttyACM0:57600" />
+  <arg name="gcs_url" default="" />
+  <!-- simulation_transport selects a fixed loopback SITL endpoint, ignoring fcu_url. -->
+  <include if="$(arg start_mavros)" file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="$(eval 'udp://:14540@127.0.0.1:14557' if str(arg('simulation_transport')).lower() == 'true' else arg('fcu_url'))" />
+    <arg name="gcs_url" value="$(arg gcs_url)" />
+  </include>
+  <node pkg="state_source_manager" type="state_source_manager.py" name="state_source_manager" output="screen" required="true">
+    <param name="source_config" value="$(arg source_config)" />
+  </node>
+  <node pkg="state_adapter" type="state_adapter.py" name="state_adapter" output="screen" required="true">
+    <param name="source_config" value="$(arg source_config)" />
+  </node>
+  <node pkg="px4_backend" type="px4_backend.py" name="px4_backend" output="screen" required="true">
+    <rosparam command="load" file="$(find uav_system)/config/px4.yaml" />
+    <rosparam subst_value="true">output_enabled: $(arg output_enabled)
+simulation_transport: $(arg simulation_transport)</rosparam>
+  </node>
+  <node if="$(arg start_ev_observer)" pkg="flight_supervisor" type="px4_ev_observer.py" name="px4_ev_observer" output="screen" required="true">
+    <rosparam command="load" file="$(find uav_system)/config/px4.yaml" />
+  </node>
+  <node pkg="flight_supervisor" type="flight_supervisor.py" name="flight_supervisor" output="screen" required="true">
+    <rosparam command="load" file="$(find uav_system)/config/safety.yaml" />
+    <param name="backend_output_enabled" value="$(arg output_enabled)" />
+    <param name="simulation_transport" value="$(arg simulation_transport)" />
+  </node>
+</launch>

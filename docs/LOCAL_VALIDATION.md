@@ -4,9 +4,13 @@
 本轮云端只编辑并测试软件，没有连接真实 RealSense/Pixhawk，没有 ARM、模式切换、PX4 参数写入或固件构建/刷写。
 本地后续先完成构建与只读/软件验证，再按用户当时授权决定是否做硬件或飞行操作。
 
-目录已整理为根 `launch/`、`config/`、`test/` 与五个业务包；共享基础包集中在 `src/support/`，OpenVINS和PX4源码集中在 `third_party/`。业务节点直接放在包目录，例如 `src/px4_backend/px4_backend.py`。
-`src/support/open_vins` 是catkin源码发现链接，不能删除或另复制一份OpenVINS。原 `uav_commander` 包已改名 `commander`；顶层任务入口为 `roslaunch uav_system commander.launch`。
-如果你已有本地修改，先检查 `git status` 并保存自己的改动，再使用 `git pull --ff-only` 获取目录整理提交；不要覆盖本地标定配置。若已经构建旧的 `uav_commander` 包，整理后需清理该旧包的devel/install产物；必要时在保存修改后执行 `catkin clean`，再重新 `catkin build`，避免旧入口继续被ROS发现。
+现在自有代码只有一个ROS包uav_system，构建清单在 `src/uav_system/`；五个业务目录仅放代码。
+共享Python代码/状态消息在 `src/support/`，消息类型改为 `uav_system.msg`；根配置使用 `config/state_sources/`。
+OpenVINS/PX4实际源码位于third_party，src/support/open_vins仅为catkin发现链接。
+
+如果已经拉取旧版，先保存并检查自己的本地修改，再 `git pull --ff-only`，不要覆盖本地标定。
+已有本地定位配置从config/sources/迁移到config/state_sources/，用户自定义source_config绝对路径也需同步。
+若构建过旧的state_source_manager/state_adapter/flight_supervisor/px4_backend/commander/uav_core/uav_msgs包，保存工作后清理旧构建产物并重新catkin build，避免旧消息类型或可执行入口被ROS继续发现。
 
 ## 1. 构建门
 

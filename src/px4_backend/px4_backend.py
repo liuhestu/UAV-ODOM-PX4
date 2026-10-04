@@ -10,7 +10,7 @@ from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Bool
 from mavros_msgs.msg import State, ExtendedState
 from mavros_msgs.srv import SetMode, SetModeResponse, CommandBool, CommandBoolResponse
-from uav_msgs.msg import SourceStatus, SystemStatus
+from uav_system.msg import SourceStatus, SystemStatus
 from uav_core.geometry import rotation, covariance
 from uav_core.runtime import Inbox, xyz, xyzw, wall_loop
 

@@ -12,7 +12,7 @@ import time
 import rospy
 from mavros_msgs.msg import Mavlink, State
 from mavros_msgs.srv import ParamGet
-from uav_msgs.msg import SourceStatus, EvStatus
+from uav_system.msg import SourceStatus, EvStatus
 from uav_core.evidence import TOPICS, parse_listener, evaluate_listener
 from uav_core.mavlink_serial import encode
 from uav_core.runtime import Inbox

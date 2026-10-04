@@ -1,5 +1,0 @@
-cmake_minimum_required(VERSION 3.0.2)
-project(flight_supervisor)
-find_package(catkin REQUIRED)
-catkin_package()
-catkin_install_python(PROGRAMS flight_supervisor.py px4_ev_observer.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

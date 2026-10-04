@@ -4,7 +4,7 @@ import time
 import numpy as np
 import rospy
 from nav_msgs.msg import Odometry
-from uav_msgs.msg import SourceStatus
+from uav_system.msg import SourceStatus
 from uav_core.config import load_source
 from uav_core.geometry import Adapter
 from uav_core.runtime import assign, xyz, xyzw, wall_loop

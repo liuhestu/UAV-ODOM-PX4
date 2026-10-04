@@ -2,23 +2,26 @@
 
 ## 目录约定
 
-五个业务包放在 `src/`：state_source_manager、state_adapter、flight_supervisor、px4_backend、commander。
-根目录的 `launch/`、`config/`、`test/` 是唯一编辑入口。mock 节点源文件位于 `test/mock_state_source.py`，由 state_source_manager 的 catkin_install_python 导出为 ROS可执行文件。
-`launch/test/mock_source.launch` 是 Source Manager 选 mock 的内部启动入口；`mock_system.launch` 是完整的软件测试入口。
-共享数学与策略模块、ROS消息和启动包元数据集中到 `src/support/`；该目录下的 open_vins 链接让catkin发现第三方源码中的ROS包。业务包的节点文件直接放在包目录，不嵌套scripts。OpenVINS与PX4固件均放在 `third_party/`，历史文档通过Git恢复。
-启动包中的 config/launch 仅为指向根目录的符号链接；catkin install从根目录复制实际文件，以同时保持devel与install中的 `$(find uav_system)` 路径正确。
+自有代码只有一个ROS包 `uav_system`。唯一的CMakeLists.txt、package.xml与Python安装描述setup.py在 `src/uav_system/`。
+`src/` 下五个业务目录是代码模块，各模块节点直接放在对应目录；统一由uav_system的catkin_install_python导出，launch中的pkg全部为uav_system。
+根 `launch/`、`config/`、`test/` 为编辑入口。定位源配置位于 `config/state_sources/`。mock源码在test/，由同一构建清单导出。
+
+support保留三类内容：uav_core共享Python模块、msg状态消息、OpenVINS源码发现链接。它不包含独立ROS包清单。
+共享核心从 `src/support/uav_core` 安装；消息由uav_system生成，Python导入 `uav_system.msg`。
+OpenVINS和PX4均位于third_party，OpenVINS自带包清单保留，PX4不参与catkin构建。
+启动包中的config/launch仅为指向根目录的链接；catkin install复制根目录实际文件，保持devel/install路径一致。
 
 ## 接口契约
 
 | 接口 | 类型 | 语义 |
 |---|---|---|
 | 源 YAML `input.topic` | `nav_msgs/Odometry` | 测量时间；显式输入 world/body frame、线速度表达系、姿态误差协方差表达系 |
-| `/uav/source/status` | `uav_msgs/SourceStatus` | 源进程/原始数据健康，启动 session UUID |
+| `/uav/source/status` | `uav_system/SourceStatus` | 源进程/原始数据健康，启动 session UUID |
 | `/uav/state/odom` | `nav_msgs/Odometry` | `odom` Z-up world，`base_link` FLU；pose 在 world，twist 在 body；米/rad/秒 |
-| `/uav/state/health` | `uav_msgs/SourceStatus` | Adapter 健康，沿用源 session |
+| `/uav/state/health` | `uav_system/SourceStatus` | Adapter 健康，沿用源 session |
 | `/uav/backend/ev_sent` | `std_msgs/Bool` | 本机近期发布过 EV，有 MAVROS subscriber 且所需 TF 存在；不代表 PX4 收到 |
-| `/uav/px4/ev_status` | `uav_msgs/EvStatus` | PX4 侧 EV 接收、位置/高度融合与 local-position reset 证据 |
-| `/uav/system/status` | `uav_msgs/SystemStatus` | 就绪/解锁前置条件、具体阻塞项、最近 PX4 文本 |
+| `/uav/px4/ev_status` | `uav_system/EvStatus` | PX4 侧 EV 接收、位置/高度融合与 local-position reset 证据 |
+| `/uav/system/status` | `uav_system/SystemStatus` | 就绪/解锁前置条件、具体阻塞项、最近 PX4 文本 |
 | `/uav/system/ready`, `/uav/system/arm_ready` | `std_msgs/Bool` | 方便人查看；控制使用带时间戳的完整 status |
 | `/uav/command/trajectory` | `geometry_msgs/PoseStamped` | 第一版仅 position + yaw，`px4_local` 表示 PX4 local ENU 数值坐标；不使用 VIO world 作目标 |
 | `/uav/backend/set_mode` | `mavros_msgs/SetMode` | 只接受 OFFBOARD/AUTO.LAND；状态/健康/预发送门控 |

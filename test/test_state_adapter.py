@@ -8,7 +8,7 @@ from uav_core.geometry import Adapter, rotation, quaternion, skew
 
 
 def config():
-    return yaml.safe_load((ROOT/'config/sources/mock.yaml').read_text())
+    return yaml.safe_load((ROOT/'config/state_sources/mock.yaml').read_text())
 
 
 class AdapterTests(unittest.TestCase):

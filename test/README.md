@@ -9,7 +9,7 @@
 | `test_supervisor.py` | 所有就绪条件必须满足；mock硬件限制与未标定解锁限制 |
 | `test_watchdog.py` | 数据心跳过期、旧测量时间、ROS时钟暂停/回退时的wall-time保护 |
 | `test_evidence.py` | PX4融合证据解析、旧数据/拒绝/缺字段处理及MAVLink字节/CRC对照 |
-| `test_structure.py` | YAML、manifest、Python语法、launch文件引用、目录链接和catkin包发现 |
+| `test_structure.py` | YAML、manifest、Python语法、launch文件引用、单一自有ROS包、节点导出、目录链接和catkin包发现 |
 | `support.py` | 测试公共路径设置，无测试用例 |
 | `mock_state_source.py` | 软件测试运行时数据源，不是单元测试；通过mock launch启动 |
 | `requirements.txt` | 软件检查依赖 |

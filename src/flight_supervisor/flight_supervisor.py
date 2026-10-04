@@ -4,7 +4,7 @@ import rospy
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 from mavros_msgs.msg import State, ExtendedState, EstimatorStatus, SysStatus, StatusText
-from uav_msgs.msg import SourceStatus, SystemStatus, EvStatus
+from uav_system.msg import SourceStatus, SystemStatus, EvStatus
 from uav_core.geometry import rotation
 from uav_core.readiness import evaluate
 from uav_core.runtime import Inbox, xyz, xyzw, wall_loop

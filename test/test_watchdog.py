@@ -16,7 +16,7 @@ class WatchdogTests(unittest.TestCase):
         self.clock=10.0;self.wall=100.0
         fake=types.ModuleType('rospy')
         fake.Time=types.SimpleNamespace(now=lambda:FakeStamp(self.clock))
-        spec=importlib.util.spec_from_file_location('watchdog_runtime',ROOT/'src/support/uav_core/python/uav_core/runtime.py')
+        spec=importlib.util.spec_from_file_location('watchdog_runtime',ROOT/'src/support/uav_core/runtime.py')
         self.module=importlib.util.module_from_spec(spec)
         with patch.dict('sys.modules',{'rospy':fake}):spec.loader.exec_module(self.module)
         self.box=self.module.Inbox()

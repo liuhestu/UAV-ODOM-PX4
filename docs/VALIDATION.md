@@ -34,3 +34,9 @@ mock源文件移到 test/；三个基础支持包集中到 src/support/；PX4源
 OpenVINS源码原样移到third_party/open_vins，src/support/open_vins仅为catkin发现链接。五个业务包去除scripts子目录，CMake导出与launch可执行文件名同步验证。
 六个测试模块保留；test/support.py为公共路径辅助，mock源与依赖清单保留。CI改用scripts/run_checks.sh作为与本地相同的唯一运行入口。
 完整软件测试39项通过；测试验证catkin发现OpenVINS包、链接目的地、直接节点路径和launch可执行文件引用。
+
+## 自有ROS包合并与定位配置重命名
+
+合并为单一uav_system包，五个业务目录继续独立，原重复CMake/package.xml移除；消息由uav_system生成，共享Python从support/uav_core安装。
+config/state_sources替代config/sources。结构测试核对唯一自有包、全部节点导出、消息文件、launch与YAML路径以及第三方包发现，39项测试通过。
+使用官方catkin的interrogate_setup_dot_py.py验证Python安装描述，结果为uav_core模块路径../support/uav_core。仍未执行ROS/catkin全构建或消息生成。

@@ -13,26 +13,26 @@ Supervisor 汇总定位、遥测和 PX4 侧融合证据；Commander 自动等待
 ```text
 UAV-ODOM-PX4/
 ├── src/
-│   ├── state_source_manager/
+│   ├── state_source_manager/ # 代码模块
 │   ├── state_adapter/
 │   ├── flight_supervisor/
 │   ├── px4_backend/
 │   ├── commander/
-│   └── support/             # 共享代码、ROS消息、启动包元数据
-│   │   ├── uav_core/
-│   │   ├── uav_msgs/
-│   │   ├── uav_system/
-│   │   └── open_vins -> ../../third_party/open_vins
-├── test/                   # 单元测试与唯一的 mock 数据源
+│   ├── uav_system/          # 唯一自有ROS包的构建定义
+│   │   ├── CMakeLists.txt
+│   │   ├── package.xml
+│   │   └── setup.py
+│   └── support/
+│       ├── uav_core/        # 共享Python代码
+│       ├── msg/             # SourceStatus/SystemStatus/EvStatus
+│       └── open_vins -> ../../third_party/open_vins
+├── test/
 ├── launch/
 │   ├── system.launch
 │   ├── commander.launch
 │   └── test/
-│       ├── mock_system.launch
-│       ├── mock_source.launch
-│       └── sitl_integration.launch
 ├── config/
-│   ├── sources/
+│   ├── state_sources/
 │   │   ├── openvins.yaml
 │   │   ├── nokov.yaml
 │   │   └── mock.yaml
@@ -46,22 +46,21 @@ UAV-ODOM-PX4/
 └── docs/
 ```
 
-配置和 launch 只在根目录保存一份。`src/support/uav_system/config` 与 `launch` 是指向它们的符号链接，让 ROS1 devel 环境仍能使用 `$(find uav_system)`；安装时 CMake 复制根目录实际内容，不安装这些相对链接。
-业务包的 Python 节点直接放在包目录，例如 `src/px4_backend/px4_backend.py`，不再嵌套 `scripts/`。
-`src/support/open_vins` 仅是源码发现链接；OpenVINS 实际文件只在 `third_party/open_vins/` 中保存一份，catkin 仍能发现其ROS包。
-`commander` 的包名与目录名一致。数学核心使用 Python，因此对应测试为 `test/test_state_adapter.py`，不是先前示意中的 C++ 文件。
+自有代码只构建一个ROS包 `uav_system`，共用 `src/uav_system/CMakeLists.txt` 与 `package.xml`。五个业务目录是独立代码模块，不再各自包含构建清单或 scripts 子目录。
+节点统一通过 `rosrun uav_system <node.py>` 或根 launch 启动；ROS消息类型统一为 `uav_system/SourceStatus` 等。
 
-| 包 | 职责 |
+配置和launch只在根目录保存一份。`src/uav_system/config` 与 `launch` 是引用根目录的符号链接，让ROS1 devel环境仍能使用 `$(find uav_system)`；安装时复制真实内容。
+OpenVINS源码只在 `third_party/open_vins` 保存；`src/support/open_vins` 是catkin发现链接，保留第三方自身的ROS包定义。
+
+| 模块 | 职责 |
 |---|---|
-| `state_source_manager` | 根据源 YAML 用 roslaunch API 启动源；单实例锁、节点冲突和进程退出检查 |
-| `state_adapter` | 源世界/机体系与参考点转换、速度/协方差变换、时间戳与跳变检查 |
-| `flight_supervisor` | 心跳、状态就绪、PX4 诊断与只读 EV 融合观察 |
-| `px4_backend` | MAVROS ODOMETRY/setpoint 边界与有门控的模式、解锁服务 |
-| `commander` | 一次性 takeoff/hover/land 状态机 |
-| `src/support/uav_core` / `uav_msgs` | 独立数学/策略核心与明确的状态消息 |
-| `src/support/uav_system` | ROS 启动包元数据，引用根目录 `config/` 与 `launch/` |
-| `third_party/open_vins` | 保留原估计器；包含 ROS1 RealSense 启动文件 |
-| `third_party/px4_autopilot` | 原有固件源码，位于 catkin 工作区 src 之外 |
+| `state_source_manager` | 源YAML与roslaunch API、单实例与进程/数据健康 |
+| `state_adapter` | 外参、参考点、速度/协方差转换与数据校验 |
+| `flight_supervisor` | 状态就绪、PX4诊断与只读融合观察 |
+| `px4_backend` | MAVROS里程计/目标点与门控的模式、解锁接口 |
+| `commander` | 一次性takeoff/hover/land状态机 |
+| `support/uav_core` | 上述模块使用的数学、配置、watchdog、策略与协议代码 |
+| `support/msg` | 明确的状态消息，生成到 `uav_system.msg` |
 
 旧 ROS2 `estimator_adapter`、`px4ctrl`（包括旧台架和一次性触发脚本）已删除。
 旧评测文档和旧代码不再留在当前目录，需要时通过 Git 历史恢复。
@@ -102,7 +101,7 @@ OpenVINS/NOKOV 配置里的单位外参和世界轴对齐默认**未验证**，�
 
 ## 通用定位源配置
 
-`state_source:=openvins` 选择 `config/sources/openvins.yaml`。
+`state_source:=openvins` 选择 `config/state_sources/openvins.yaml`。
 YAML 中定义 launch package/file/args、输入话题/语义、`T_SB` 外参和 `T_AW` 世界对齐。
 它不执行 YAML shell 字符串。新增 Odometry 源通常只需要新增一份 YAML。
 

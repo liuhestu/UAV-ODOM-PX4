@@ -9,7 +9,7 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import String
 from mavros_msgs.msg import State, ExtendedState
 from mavros_msgs.srv import SetMode, CommandBool
-from uav_msgs.msg import SystemStatus
+from uav_system.msg import SystemStatus
 from uav_core.geometry import rotation
 from uav_core.mission import Mission
 from uav_core.runtime import Inbox, assign, xyz, xyzw, wall_loop

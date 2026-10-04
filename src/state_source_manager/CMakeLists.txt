@@ -1,5 +1,0 @@
-cmake_minimum_required(VERSION 3.0.2)
-project(state_source_manager)
-find_package(catkin REQUIRED)
-catkin_package()
-catkin_install_python(PROGRAMS state_source_manager.py ${CMAKE_CURRENT_SOURCE_DIR}/../../test/mock_state_source.py DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

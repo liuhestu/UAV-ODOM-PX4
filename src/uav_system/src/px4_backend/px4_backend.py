@@ -41,7 +41,8 @@ def main():
             fcu=box.get('fcu', p['telemetry_timeout'])
             valid=bool(p['output_enabled'] and transport_ok() and fcu and fcu.connected)
             if req.custom_mode=='OFFBOARD':
-                valid = valid and eligible() and stream_start[0] is not None and last_stream[0] is not None and time.monotonic()-last_stream[0]<0.2 and time.monotonic()-stream_start[0]>=p['prestream_seconds']
+                ext=box.get('extended', p['telemetry_timeout'])
+                valid = valid and ext and ext.landed_state==1 and eligible() and stream_start[0] is not None and last_stream[0] is not None and time.monotonic()-last_stream[0]<0.2 and time.monotonic()-stream_start[0]>=p['prestream_seconds']
             elif req.custom_mode=='AUTO.LAND':
                 # Never override a pilot takeover.
                 valid = valid and fcu.armed and fcu.mode=='OFFBOARD'
@@ -58,6 +59,8 @@ def main():
             fcu=box.get('fcu', p['telemetry_timeout'])
             ext=box.get('extended', p['telemetry_timeout'])
             valid=bool(p['output_enabled'] and transport_ok() and fcu and fcu.connected)
+            if req.value and valid and fcu.armed:
+                return CommandBoolResponse(success=True, result=0)
             if req.value:
                 valid = valid and eligible() and fcu.mode=='OFFBOARD' and ext and ext.landed_state==1
             else:

@@ -11,13 +11,15 @@ from mavros_msgs.msg import State, ExtendedState
 from mavros_msgs.srv import SetMode, CommandBool
 from uav_system.msg import SystemStatus
 from uav_core.geometry import rotation
-from uav_core.mission import Mission
+from uav_core.mission import Mission, normalize_config
 from uav_core.runtime import Inbox, assign, xyz, xyzw, wall_loop
 
 
 def main():
     rospy.init_node('takeoff_hover_land')
-    cfg=rospy.get_param('~'); mission=Mission(cfg)
+    cfg=normalize_config(rospy.get_param('~'), rospy.logwarn)
+    rospy.set_param('~auto_arm', cfg['auto_arm'])
+    mission=Mission(cfg)
     box=Inbox()
     for topic, cls, key in [('/uav/system/status',SystemStatus,'system'), ('/mavros/state',State,'fcu'),
         ('/mavros/extended_state',ExtendedState,'extended'), ('/mavros/local_position/odom',Odometry,'local')]:
@@ -60,7 +62,7 @@ def main():
                     if mission.state in ('PRESTREAM','WAIT_OFFBOARD','WAIT_ARM','TAKEOFF','HOVER') and not jump_fault[0] and last_local[0] and np.linalg.norm(np.asarray(pos)-last_local[0])>cfg['max_local_position_step']:
                         jump_fault[0]=True
                         with result_lock: busy=pending['action'] is not None
-                        mission.enter('ABORT_LAND_MODE' if fcu and fcu.armed and fcu.mode=='OFFBOARD' and not busy else 'ABORTED',time.monotonic(),'PX4 local position jump')
+                        mission.enter('ABORT_LAND_MODE' if mission.state in ('TAKEOFF','HOVER') and fcu and fcu.armed and fcu.mode=='OFFBOARD' and not busy else 'ABORTED',time.monotonic(),'PX4 local position jump')
                         if mission.state=='ABORT_LAND_MODE': request('LAND')
                     last_local[0]=pos
                     local=tuple(pos)+(math.atan2(R[1,0],R[0,0]),)

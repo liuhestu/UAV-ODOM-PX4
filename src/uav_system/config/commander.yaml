@@ -1,4 +1,4 @@
-arm_method: auto
+auto_arm: false
 rate_hz: 30.0
 height: 0.5
 climb_rate: 0.15

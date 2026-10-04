@@ -24,3 +24,8 @@ bash scripts/run_checks.sh
 
 直接运行 `python3 -m unittest discover -s test -v` 只执行单元/静态检查；统一入口还运行 `git diff --check`。
 GitHub CI调用同一个统一入口。没有在这里运行硬件、ARM、飞行或SITL任务；mock数据源也不会自动连接飞控。
+
+
+Commander 提前 ARM 回归覆盖两种 `auto_arm`、各准备阶段的遥控器 ARM、提前 OFFBOARD、地面恢复/丢失、连续就绪/session、地面目标更新及起飞基准、手动无限等待、一次请求/拒绝/实际状态超时、人工接管/上锁和终止锁定。Backend 与 Commander runtime 测试使用内存 ROS 替身，包含准备阶段跳变停止、飞行中跳变降落和服务 watchdog；不连接实际 FCU。
+
+Noetic 环境下可运行 `python3 src/uav_system/test/verify_commander_wait.py`，在独立 master 11329 验证 launch 参数和 mock 等待。此为显式运行的 ROS 检查，不由 unittest 自动启动。

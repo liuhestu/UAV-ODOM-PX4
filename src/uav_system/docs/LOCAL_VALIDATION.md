@@ -51,6 +51,14 @@ rosparam set /mock_state_source/mode jump
 超时/NaN 使 adapter unhealthy；jump 锁定错误直到重启 system。Backend output_enabled=false，不能输出飞控数据或转发 ARM。
 同时启动 Commander 验证它停留 WAIT_SYSTEM；不要用假健康或固定姿态把它解锁。
 
+可复跑隔离软件检查（自建 `localhost:11329` master，端口须空闲；只启动 mock 与 Commander，结束后清理本轮进程）：
+
+```bash
+python3 src/uav_system/test/verify_commander_wait.py
+```
+
+该脚本检查默认 `auto_arm=false`、显式新参数、旧参数映射和新旧参数冲突，确认缺失真实 PX4/融合证据时始终 WAIT_SYSTEM。Backend 服务回归使用 unittest 内存替身，不连接 MAVROS。系统 Python 缺 pymavlink 时可按既有环境记录临时设置 `PYTHONPATH=/home/jetson/px4_exp/.venv/lib/python3.10/site-packages` 运行 `run_checks.sh`，这不代表系统依赖已安装。
+
 ## 3. 定位源只读门（获硬件验证授权后）
 
 ```bash
@@ -104,7 +112,8 @@ roslaunch uav_system sitl_integration.launch source_config:=/absolute/path/to/si
 
 检查实际 `/mavros/fcu_url` 为 `udp://:14540@127.0.0.1:14557`；Backend 会检查同一参数。
 先完成 ready、EV pos/hgt 融合与 on-ground，然后在模拟环境启动第二终端 Commander。
-检查服务只请求一次；服务响应和 FCU实际 mode/armed 分开；爬升限速、hover、AUTO.LAND、landed与disarmed顺序。
+使用 `roslaunch uav_system commander.launch auto_arm:=false` 验证遥控器在启动前、初始化期间、预发送期间及就绪后 ARM；再使用 `auto_arm:=true` 验证自动 ARM 请求最多一次，已 ARM 时不重复请求。提前 OFFBOARD 时不重复请求模式。两种配置均须完成连续就绪、地面确认和预发送后才起飞；手动 ARM 可长期等待。
+检查服务响应与 FCU 实际 mode/armed 分开；非零 local 原点下地面保持目标随位姿更新，进入 TAKEOFF 当轮保持地面目标，之后按速率爬升。初始 landed 未知/空中时只等待，恢复地面后重新完成稳定窗口；准备阶段再丢失地面、故障或人工上锁则停止输出并锁定。检查 hover、AUTO.LAND、landed 与 disarmed 顺序。
 注入数据停止、NaN、frame错误、时间回退、源重启、坐标跳变、ARM拒绝、mode被接管、遥测中断；确认任务锁定退出且不续飞、不空中上锁。
 
 ## 已知需本地确认的范围

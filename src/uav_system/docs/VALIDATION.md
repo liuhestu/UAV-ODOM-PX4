@@ -104,3 +104,27 @@ config/state_sources替代config/sources。结构测试核对唯一自有包、�
 - 加载外部 RealSense 工作区后使用新 devel/setup.bash --extend，确认 RealSense 可被发现，同时新的 OpenVINS 包优先于旧工作区。
 
 Jetson 日志：`/tmp/uav_workspace_layout_checks_final.log`、`/tmp/uav_workspace_layout_build.log`、`/tmp/uav_workspace_layout_build_final.log`、`/tmp/uav_layout_mock.log`、`/tmp/uav_layout_commander.log`。本次迁移未启动实机 Commander、未修改 PX4 参数或标定；以前记录的真实 VIO/融合/RC 阻塞仍未解决。本次验证不等于实机飞行或 PX4 固件构建通过。
+
+## Commander 提前遥控器 ARM：2026-10-05
+
+分支 `refactor/native-px4-ros1`，在 SSHFS 工作区编辑并通过 `ssh jetson-uav-odom` 在 Jetson 做软件验证。保留未跟踪的根目录 `AGENTS.md`，未提交或推送。
+
+- 默认配置迁移为严格布尔值 `auto_arm: false`，只控制 ARM 请求；落地 DISARM 保持原流程。launch 使用独立字符串覆盖参数区分 YAML/显式启动来源，归一化后将有效值写回节点私有 `auto_arm`；launch 清理该节点旧私有参数，避免前一次运行遗留新旧键造成来源冲突。旧 `arm_method=auto/manual` 映射并警告；新旧冲突及非法类型拒绝。
+- WAIT_SYSTEM 允许提前 ARM；健康、标定、通信、鲜活 local 和 ON_GROUND 连续通过稳定窗口，ARM 变化不重置窗口，session/条件中断重新计时。初始化期间地面未知/空中持续等待。
+- 准备阶段每轮更新鲜活 local 地面目标；预发送、实际 OFFBOARD/ARM、健康与地面确认通过后固定起飞基准，当轮保持地面目标。提前 OFFBOARD/ARM 不重复请求；`auto_arm=false` 长期等待遥控器 ARM，true 最多请求一次并保留确认超时。
+- 准备阶段故障或地面确认丢失停止命令并锁定，定位跳变不触发起飞前 LAND。首次鲜活 ARM 后主动上锁终止任务。保留飞行故障降落、人工接管、服务 watchdog、正常落地确认及禁止空中 DISARM。
+- Supervisor 审核：`flight_supervisor.py` 的 gates 与 `readiness.evaluate` 不要求 armed=false；健康/标定/融合门未修改，无消息变更。Backend OFFBOARD 服务增加鲜活 ON_GROUND 门，已 ARM 的 ARM 请求返回成功但不转发；飞行设定点转发未增加地面门。
+
+验证结果：
+
+| 检查 | 结果 |
+|---|---|
+| `PYTHONPATH=/home/jetson/px4_exp/.venv/lib/python3.10/site-packages bash src/uav_system/scripts/run_checks.sh` | 61 项 unittest 通过，Python/XML/YAML/结构与 Git whitespace 检查通过 |
+| `./scripts/build.sh --no-status` | 全部 6 个 catkin 包增量构建成功，6.3 秒，1 个包警告、无失败 |
+| Noetic + 新 devel 环境下 `python3 src/uav_system/test/verify_commander_wait.py` | 独立 master `localhost:11329`；launch 默认值、显式 true/false、旧 auto/manual、参数及 YAML 冲突检查通过；默认/true/旧 manual 参数与旧 YAML 的 Commander 均保持 WAIT_SYSTEM，有效私有 auto_arm 符合配置 |
+| mock static/timeout/nan/jump/恢复 | static healthy；timeout/nan unhealthy，恢复 static 后 healthy；jump 故障锁定，恢复 static 仍 unhealthy；ready/arm_ready/backend_output_enabled 始终 false |
+| Backend/Commander runtime 服务回归 | 使用内存 ROS 替身；ON_GROUND 门、冗余 ARM、禁止空中 DISARM、准备阶段跳变停止、飞行跳变 LAND 和服务卡死 watchdog 通过；未连接 MAVROS/FCU |
+
+系统 Python 首次完整检查因缺 pymavlink 失败；使用此前已有虚拟环境依赖后通过，未安装/更改系统依赖。ROS 软件图中没有 MAVROS 节点，本轮新建进程已清理。日志位于 Jetson `/tmp/uav_early_arm_checks.log`、`/tmp/uav_early_arm_build.log`、`/tmp/uav_early_arm_ros.log` 和 `/tmp/uav_early_arm_ros_98cr4yua/`。
+
+未执行 PX4 SITL、实机 ARM/DISARM、模式切换、飞行、PX4 参数写入或固件刷写。提前 ARM 的任务运动行为由确定性/替身测试覆盖，mock 检查只验证未就绪等待，不代表真实 OFFBOARD 接管或飞行通过。SITL 与实机流程仍按 `LOCAL_VALIDATION.md` 分阶段授权验证。

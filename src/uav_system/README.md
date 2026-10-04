@@ -65,7 +65,7 @@ source devel/setup.bash
 
 ## 两终端入口
 
-完成 [本地验证](docs/LOCAL_VALIDATION.md) 后的运行入口如下。启动 Commander 即代表授权该次任务；就绪后它会自动请求 Offboard/解锁并执行任务。
+完成 [本地验证](docs/LOCAL_VALIDATION.md) 后的运行入口如下。启动 Commander 即代表授权该次任务；全部门控通过、实际进入 OFFBOARD 且已 ARM 后自动执行一次任务。默认等待遥控器 ARM，仍会请求 OFFBOARD、降落和落地后 DISARM。
 
 ```bash
 # 终端 1：只启动基础链，不启动 Commander。
@@ -76,7 +76,13 @@ roslaunch uav_system commander.launch
 ```
 
 默认任务：爬升 0.5 m，爬升目标速度 0.15 m/s，悬停 5 s，再请求 AUTO.LAND。
-参数在 `config/commander.yaml`。需要遥控器解锁时传 `arm_method:=manual`。
+参数在 `config/commander.yaml`，默认严格布尔值 `auto_arm: false`。遥控器可在启动前、初始化期间或就绪后 ARM；不需要额外开始开关。需要允许 Commander 请求 ARM 时显式传 `auto_arm:=true`，遥控器 ARM 模式可传 `auto_arm:=false`。此选项只控制 ARM 请求，不改变降落及落地后的 DISARM。
+
+初始化期间若已 ARM 但缺少鲜活 ON_GROUND 确认，Commander 持续等待，不发布设定点或请求模式。连续就绪窗口通过后开始预发送，每轮使用鲜活 PX4 local 位姿保持地面位置；预发送完成、实际 OFFBOARD/ARM、地面确认和所有检查通过时固定起飞基准，当轮仍保持地面目标，随后限速爬升。遥控器 ARM 等待没有 8 秒超时；自动 ARM 的请求与实际状态确认仍有超时。服务成功不能代替 FCU 状态确认。
+
+准备阶段发生健康/通信/local/session 故障、地面确认丢失、非预期模式变化或请求超时会锁定终止；起飞前不自动接管降落。从首次观察到鲜活 ARM 后，主动上锁也会终止本次任务。终止后不恢复、不重复任务、不抢回模式。
+
+迁移：旧 YAML `arm_method: auto/manual` 或旧启动参数 `arm_method:=auto/manual` 仍映射为 `auto_arm=true/false`，启动时输出弃用警告。旧启动参数可覆盖新版 YAML 默认值。禁止同一 YAML 同时定义新旧键、同时传新旧启动参数，以及旧 YAML 配合显式新启动参数。`auto_arm` YAML 仅接受布尔类型，启动参数仅接受 `true/false`；未传参数时使用 YAML 值，无键时默认 false。可用 `config:=/absolute/path/to/commander.yaml` 选择配置。
 Commander 等待带时间戳的 `/uav/system/status`，不会依赖可能滞后的单个 Bool。
 
 OpenVINS/NOKOV 配置里的单位外参和世界轴对齐默认**未验证**，因此 `arm_ready=false`。

@@ -3,7 +3,7 @@ import math
 import unittest
 import numpy as np
 import yaml
-from test_support import ROOT
+from support import ROOT
 from uav_core.geometry import Adapter, rotation, quaternion, skew
 
 

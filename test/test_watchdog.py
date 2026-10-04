@@ -2,7 +2,7 @@ import importlib.util
 import types
 import unittest
 from unittest.mock import patch
-from test_support import ROOT
+from support import ROOT
 
 
 class FakeStamp:

@@ -1,5 +1,5 @@
 import unittest
-from test_support import ROOT
+from support import ROOT
 from uav_core.readiness import evaluate
 
 

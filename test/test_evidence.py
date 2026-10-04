@@ -1,6 +1,6 @@
 import copy
 import unittest
-from test_support import ROOT
+from support import ROOT
 from uav_core.evidence import TOPICS, parse_listener, evaluate_listener
 from uav_core.mavlink_serial import encode
 

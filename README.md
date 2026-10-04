@@ -18,11 +18,11 @@ UAV-ODOM-PX4/
 │   ├── flight_supervisor/
 │   ├── px4_backend/
 │   ├── commander/
-│   ├── support/             # 共享代码、ROS消息、启动包元数据
+│   └── support/             # 共享代码、ROS消息、启动包元数据
 │   │   ├── uav_core/
 │   │   ├── uav_msgs/
-│   │   └── uav_system/
-│   └── open_vins/           # 定位源依赖
+│   │   ├── uav_system/
+│   │   └── open_vins -> ../../third_party/open_vins
 ├── test/                   # 单元测试与唯一的 mock 数据源
 ├── launch/
 │   ├── system.launch
@@ -39,12 +39,16 @@ UAV-ODOM-PX4/
 │   ├── px4.yaml
 │   ├── safety.yaml
 │   └── commander.yaml
-├── third_party/px4_autopilot/
+├── third_party/
+│   ├── open_vins/
+│   └── px4_autopilot/
 ├── scripts/run_checks.sh
 └── docs/
 ```
 
 配置和 launch 只在根目录保存一份。`src/support/uav_system/config` 与 `launch` 是指向它们的符号链接，让 ROS1 devel 环境仍能使用 `$(find uav_system)`；安装时 CMake 复制根目录实际内容，不安装这些相对链接。
+业务包的 Python 节点直接放在包目录，例如 `src/px4_backend/px4_backend.py`，不再嵌套 `scripts/`。
+`src/support/open_vins` 仅是源码发现链接；OpenVINS 实际文件只在 `third_party/open_vins/` 中保存一份，catkin 仍能发现其ROS包。
 `commander` 的包名与目录名一致。数学核心使用 Python，因此对应测试为 `test/test_state_adapter.py`，不是先前示意中的 C++ 文件。
 
 | 包 | 职责 |
@@ -56,7 +60,7 @@ UAV-ODOM-PX4/
 | `commander` | 一次性 takeoff/hover/land 状态机 |
 | `src/support/uav_core` / `uav_msgs` | 独立数学/策略核心与明确的状态消息 |
 | `src/support/uav_system` | ROS 启动包元数据，引用根目录 `config/` 与 `launch/` |
-| `open_vins` | 保留原估计器；新增 ROS1 RealSense 启动文件 |
+| `third_party/open_vins` | 保留原估计器；包含 ROS1 RealSense 启动文件 |
 | `third_party/px4_autopilot` | 原有固件源码，位于 catkin 工作区 src 之外 |
 
 旧 ROS2 `estimator_adapter`、`px4ctrl`（包括旧台架和一次性触发脚本）已删除。
@@ -109,7 +113,7 @@ YAML 中定义 launch package/file/args、输入话题/语义、`T_SB` 外参和
 
 ```bash
 python3 -m pip install -r test/requirements.txt
-python3 -m unittest discover -s test -v
+bash scripts/run_checks.sh
 # ROS1 环境，纯软件 mock；不启动 MAVROS、不发送飞控数据或命令。
 roslaunch uav_system mock_system.launch
 rosparam set /mock_state_source/mode nan      # static / linear / timeout / nan / jump
@@ -117,6 +121,10 @@ rosparam set /mock_state_source/mode nan      # static / linear / timeout / nan 
 
 mock 不能在硬件传输上发送 EV 或进入 ARM。显式 SITL 模式还检查 MAVROS 的实际 FCU URL 为固定 loopback UDP 地址。
 `test/sitl_integration.launch` 是外部 PX4 SITL 集成入口，需要另行提供随仿真机体运动的模拟 Odometry 配置；不能用静止 mock 冒充飞行反馈。
+
+`test/` 中有6个测试模块、1个公共辅助模块、1个mock数据源和依赖清单。
+测试定义在 `test_*.py` 中；`scripts/run_checks.sh` 仅执行这些测试和 `git diff --check`。GitHub CI调用同一入口，不另写一套测试逻辑。
+完整用途见 [test/README.md](test/README.md)。
 
 ## 当前验证范围
 

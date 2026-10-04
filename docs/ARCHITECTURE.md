@@ -5,7 +5,7 @@
 五个业务包放在 `src/`：state_source_manager、state_adapter、flight_supervisor、px4_backend、commander。
 根目录的 `launch/`、`config/`、`test/` 是唯一编辑入口。mock 节点源文件位于 `test/mock_state_source.py`，由 state_source_manager 的 catkin_install_python 导出为 ROS可执行文件。
 `launch/test/mock_source.launch` 是 Source Manager 选 mock 的内部启动入口；`mock_system.launch` 是完整的软件测试入口。
-共享数学与策略模块、ROS消息和启动包元数据集中到 `src/support/`。OpenVINS 保留在 src，PX4固件移到 `third_party/`，历史文档通过Git恢复。
+共享数学与策略模块、ROS消息和启动包元数据集中到 `src/support/`；该目录下的 open_vins 链接让catkin发现第三方源码中的ROS包。业务包的节点文件直接放在包目录，不嵌套scripts。OpenVINS与PX4固件均放在 `third_party/`，历史文档通过Git恢复。
 启动包中的 config/launch 仅为指向根目录的符号链接；catkin install从根目录复制实际文件，以同时保持devel与install中的 `$(find uav_system)` 路径正确。
 
 ## 接口契约

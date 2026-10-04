@@ -28,3 +28,9 @@ mock源文件移到 test/；三个基础支持包集中到 src/support/；PX4源
 新增布局测试检查唯一配置/启动入口、source YAML 内部 launch路径、mock导出、devel符号链接及catkin安装路径。
 目录整理只改变文件组织、包名与引用，没有调整飞行控制策略。
 目录整理后的完整软件测试：39项通过；其中两个新增测试验证根目录布局和catkin对嵌套support包的发现。
+
+## 第三方与节点路径整理
+
+OpenVINS源码原样移到third_party/open_vins，src/support/open_vins仅为catkin发现链接。五个业务包去除scripts子目录，CMake导出与launch可执行文件名同步验证。
+六个测试模块保留；test/support.py为公共路径辅助，mock源与依赖清单保留。CI改用scripts/run_checks.sh作为与本地相同的唯一运行入口。
+完整软件测试39项通过；测试验证catkin发现OpenVINS包、链接目的地、直接节点路径和launch可执行文件引用。

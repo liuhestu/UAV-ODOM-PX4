@@ -4,7 +4,8 @@
 本轮云端只编辑并测试软件，没有连接真实 RealSense/Pixhawk，没有 ARM、模式切换、PX4 参数写入或固件构建/刷写。
 本地后续先完成构建与只读/软件验证，再按用户当时授权决定是否做硬件或飞行操作。
 
-目录已整理为根 `launch/`、`config/`、`test/` 与五个业务包；共享基础包集中在 `src/support/`。原 `uav_commander` 包已改名 `commander`；顶层任务入口为 `roslaunch uav_system commander.launch`。
+目录已整理为根 `launch/`、`config/`、`test/` 与五个业务包；共享基础包集中在 `src/support/`，OpenVINS和PX4源码集中在 `third_party/`。业务节点直接放在包目录，例如 `src/px4_backend/px4_backend.py`。
+`src/support/open_vins` 是catkin源码发现链接，不能删除或另复制一份OpenVINS。原 `uav_commander` 包已改名 `commander`；顶层任务入口为 `roslaunch uav_system commander.launch`。
 如果你已有本地修改，先检查 `git status` 并保存自己的改动，再使用 `git pull --ff-only` 获取目录整理提交；不要覆盖本地标定配置。若已经构建旧的 `uav_commander` 包，整理后需清理该旧包的devel/install产物；必要时在保存修改后执行 `catkin clean`，再重新 `catkin build`，避免旧入口继续被ROS发现。
 
 ## 1. 构建门
@@ -16,7 +17,7 @@ rosdep install --from-paths src --ignore-src -r -y
 catkin build
 source devel/setup.bash
 python3 -m pip install -r test/requirements.txt
-python3 -m unittest discover -s test -v
+bash scripts/run_checks.sh
 ```
 
 检查各本地包和 OpenVINS 的 ROS1 条件依赖。固件位于 `third_party/px4_autopilot`，不在 catkin 的 src 扫描范围内。

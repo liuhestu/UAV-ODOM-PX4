@@ -1,7 +1,7 @@
 import ast
 import unittest
 import xml.etree.ElementTree as ET
-from test_support import ROOT
+from support import ROOT
 from uav_core.config import load_source
 
 
@@ -25,7 +25,7 @@ class StructureTests(unittest.TestCase):
             for node in tree.findall('.//node'):
                 if node.attrib['pkg'] in packages:
                     script=(ROOT/'test/mock_state_source.py' if node.attrib['type']=='mock_state_source.py'
-                            else packages[node.attrib['pkg']]/'scripts'/node.attrib['type'])
+                            else packages[node.attrib['pkg']]/node.attrib['type'])
                     self.assertTrue(script.exists(),str(script));self.assertTrue(script.stat().st_mode&0o111)
         self.assertTrue((ROOT/'third_party/px4_autopilot/CATKIN_IGNORE').exists())
         self.assertFalse((ROOT/'src/px4ctrl').exists())
@@ -64,3 +64,9 @@ class StructureTests(unittest.TestCase):
         self.assertTrue({'commander','state_source_manager','state_adapter','flight_supervisor',
                          'px4_backend','uav_core','uav_msgs','uav_system','ov_msckf'}.issubset(names))
         self.assertNotIn('uav_commander',names)
+        link=ROOT/'src/support/open_vins'
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.resolve(),ROOT/'third_party/open_vins')
+        self.assertFalse((ROOT/'src/open_vins').exists())
+        for folder in ('state_source_manager','state_adapter','flight_supervisor','px4_backend','commander'):
+            self.assertFalse((ROOT/'src'/folder/'scripts').exists())

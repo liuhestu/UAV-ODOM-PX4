@@ -6,7 +6,7 @@ from uav_core.mission import Mission
 
 class MissionTests(unittest.TestCase):
     def setUp(self):
-        self.cfg=yaml.safe_load((ROOT/'src/uav_system/config/commander.yaml').read_text())
+        self.cfg=yaml.safe_load((ROOT/'config/commander.yaml').read_text())
         self.m=Mission(self.cfg);self.fcu=(True,False,'POSCTL');self.local=(0,0,0,0)
     def step(self,t,ready=True,session='s',landed=1,result=None,pending=False):
         return self.m.step(t,ready,session,self.fcu,self.local,landed,result,pending)

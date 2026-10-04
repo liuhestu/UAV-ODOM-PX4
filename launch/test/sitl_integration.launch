@@ -6,5 +6,5 @@
     <arg name="source_config" value="$(arg source_config)" />
     <arg name="simulation_transport" value="true" />
   </include>
-  <include if="$(arg start_commander)" file="$(find uav_system)/launch/commander/takeoff_hover_land.launch" />
+  <include if="$(arg start_commander)" file="$(find uav_system)/launch/commander.launch" />
 </launch>

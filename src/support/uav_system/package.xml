@@ -9,7 +9,7 @@
   <exec_depend>state_adapter</exec_depend>
   <exec_depend>flight_supervisor</exec_depend>
   <exec_depend>px4_backend</exec_depend>
-  <exec_depend>uav_commander</exec_depend>
+  <exec_depend>commander</exec_depend>
   <exec_depend>mavros</exec_depend>
   <exec_depend>mavros_extras</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>

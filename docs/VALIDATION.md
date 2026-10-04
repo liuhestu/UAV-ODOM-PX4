@@ -20,3 +20,11 @@
 
 没有执行任何 ARM、DISARM、Offboard或飞行指令，没有连接实机串口；没有写入PX4参数、修改固件控制代码或刷写固件。
 本地接续必须记录新的版本、构建结果和各 gate 证据，参见 LOCAL_VALIDATION.md。
+
+## 目录整理
+
+将 launch/config 移到根目录，任务入口统一为 commander.launch；五个业务包与讨论中的名称一致。
+mock源文件移到 test/；三个基础支持包集中到 src/support/；PX4源码移到 third_party/，删除活动目录中的旧历史文档。
+新增布局测试检查唯一配置/启动入口、source YAML 内部 launch路径、mock导出、devel符号链接及catkin安装路径。
+目录整理只改变文件组织、包名与引用，没有调整飞行控制策略。
+目录整理后的完整软件测试：39项通过；其中两个新增测试验证根目录布局和catkin对嵌套support包的发现。

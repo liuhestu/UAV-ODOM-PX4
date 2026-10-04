@@ -5,8 +5,8 @@ schema_version: 1
 source:
   simulated: true
   launches:
-  - package: state_source_manager
-    file: mock.launch
+  - package: uav_system
+    file: mock_source.launch
     args: {}
   owned_nodes:
   - /mock_state_source

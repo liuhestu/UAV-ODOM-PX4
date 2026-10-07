@@ -20,8 +20,17 @@ log/
 *.ulg
 *.pcap
 *.log
+flight_logs
 
 # Common local files
 .DS_Store
 *~
 *.swp
+
+# ROS1 catkin generated output
+devel/
+.catkin_tools/
+logs/
+
+# Previous workspace build products retained during layout migration
+.legacy_catkin/

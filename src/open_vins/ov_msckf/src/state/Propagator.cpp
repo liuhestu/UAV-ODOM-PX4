@@ -137,15 +137,40 @@ void Propagator::propagate_and_clone(std::shared_ptr<State> state, double timest
   StateHelper::augment_clone(state, last_w);
 }
 
+void Propagator::publish_state_snapshot(const std::shared_ptr<State> &state) {
+  auto snapshot = std::make_shared<StateSnapshot>();
+  snapshot->timestamp = state->_timestamp;
+  snapshot->mean = state->_imu->value();
+  snapshot->covariance = StateHelper::get_marginal_covariance(state, {state->_imu});
+  snapshot->time_offset = state->_calib_dt_CAMtoIMU->value()(0);
+  snapshot->oldest_clone = state->margtimestep();
+  snapshot->Dw = State::Dm(state->_options.imu_model, state->_calib_imu_dw->value());
+  snapshot->Da = State::Dm(state->_options.imu_model, state->_calib_imu_da->value());
+  snapshot->Tg = State::Tg(state->_calib_imu_tg->value());
+  snapshot->R_ACCtoIMU = state->_calib_imu_ACCtoIMU->Rot();
+  snapshot->R_GYROtoIMU = state->_calib_imu_GYROtoIMU->Rot();
+  std::lock_guard<std::mutex> lock(snapshot_mtx);
+  completed_snapshot = std::move(snapshot);
+}
+
+std::shared_ptr<const Propagator::StateSnapshot> Propagator::get_state_snapshot() {
+  std::lock_guard<std::mutex> lock(snapshot_mtx);
+  return completed_snapshot;
+}
+
 bool Propagator::fast_state_propagate(std::shared_ptr<State> state, double timestamp, Eigen::Matrix<double, 13, 1> &state_plus,
                                       Eigen::Matrix<double, 12, 12> &covariance) {
 
-  // First we will store the current calibration / estimates of the state
-  if (!cache_imu_valid) {
-    cache_state_time = state->_timestamp;
-    cache_state_est = state->_imu->value();
-    cache_state_covariance = StateHelper::get_marginal_covariance(state, {state->_imu});
-    cache_t_off = state->_calib_dt_CAMtoIMU->value()(0);
+  (void)state; // Preserve the API; propagation reads only the snapshot.
+  std::lock_guard<std::mutex> lock(fast_propagation_mtx);
+  const auto snapshot = get_state_snapshot();
+  if (!snapshot) return false;
+  if (!cache_imu_valid || cache_snapshot != snapshot) {
+    cache_state_time = snapshot->timestamp;
+    cache_state_est = snapshot->mean;
+    cache_state_covariance = snapshot->covariance;
+    cache_t_off = snapshot->time_offset;
+    cache_snapshot = snapshot;
     cache_imu_valid = true;
   }
 
@@ -164,12 +189,12 @@ bool Propagator::fast_state_propagate(std::shared_ptr<State> state, double times
   Eigen::Vector3d bias_g = cache_state_est.block(10, 0, 3, 1);
   Eigen::Vector3d bias_a = cache_state_est.block(13, 0, 3, 1);
 
-  // IMU intrinsic calibration estimates (static)
-  Eigen::Matrix3d Dw = State::Dm(state->_options.imu_model, state->_calib_imu_dw->value());
-  Eigen::Matrix3d Da = State::Dm(state->_options.imu_model, state->_calib_imu_da->value());
-  Eigen::Matrix3d Tg = State::Tg(state->_calib_imu_tg->value());
-  Eigen::Matrix3d R_ACCtoIMU = state->_calib_imu_ACCtoIMU->Rot();
-  Eigen::Matrix3d R_GYROtoIMU = state->_calib_imu_GYROtoIMU->Rot();
+  // Calibration belongs to the same completed generation as mean/covariance.
+  const auto &Dw = snapshot->Dw;
+  const auto &Da = snapshot->Da;
+  const auto &Tg = snapshot->Tg;
+  const auto &R_ACCtoIMU = snapshot->R_ACCtoIMU;
+  const auto &R_GYROtoIMU = snapshot->R_GYROtoIMU;
 
   // Loop through all IMU messages, and use them to move the state forward in time
   // This uses the zero'th order quat, and then constant acceleration discrete

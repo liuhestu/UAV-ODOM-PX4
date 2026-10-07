@@ -1,0 +1,4 @@
+numpy>=1.21
+PyYAML>=5.4
+catkin_pkg>=0.5
+pymavlink>=2.4.40

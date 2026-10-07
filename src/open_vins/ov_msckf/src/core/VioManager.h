@@ -32,6 +32,8 @@
 #include <string>
 
 #include "VioManagerOptions.h"
+#include "init/StartupImuBuffer.h"
+#include "utils/sensor_data.h"
 
 namespace ov_core {
 struct ImuData;
@@ -78,7 +80,7 @@ public:
    * @brief Feed function for camera measurements
    * @param message Contains our timestamp, images, and camera ids
    */
-  void feed_measurement_camera(const ov_core::CameraData &message) { track_image_and_update(message); }
+  void feed_measurement_camera(const ov_core::CameraData &message);
 
   /**
    * @brief Feed function for a synchronized simulated cameras
@@ -191,6 +193,9 @@ protected:
   /// Our aruoc tracker
   std::shared_ptr<ov_core::TrackBase> trackARUCO;
 
+  /// Admit a continuous startup IMU window before any estimator buffer is fed.
+  ov_init::StartupImuBuffer<ov_core::ImuData> startup_imu_buffer;
+
   /// State initializer
   std::shared_ptr<ov_init::InertialInitializer> initializer;
 
@@ -216,7 +221,7 @@ protected:
   boost::posix_time::ptime rT1, rT2, rT3, rT4, rT5, rT6, rT7;
 
   // Track how much distance we have traveled
-  double timelastupdate = -1;
+  std::atomic<double> timelastupdate{-1};
   double distance = 0;
 
   // Startup time of the filter
@@ -227,7 +232,7 @@ protected:
 
   // If we did a zero velocity update
   bool did_zupt_update = false;
-  bool has_moved_since_zupt = false;
+  std::atomic<bool> has_moved_since_zupt{false};
 
   // Good features that where used in the last update (used in visualization)
   std::vector<Eigen::Vector3d> good_features_MSCKF;

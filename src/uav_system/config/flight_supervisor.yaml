@@ -1,0 +1,17 @@
+state_timeout: 0.5
+telemetry_timeout: 3.0
+evidence_timeout: 6.0
+# MAV_SYS_STATUS_SENSOR: gyro (1) and accelerometer (2).
+# Diagnostic only; does not independently block ready/arm_ready.
+required_sensor_mask: 3
+
+# Read-only PX4 external-vision fusion observer.
+observer:
+  target_system_id: 1
+  target_component_id: 1
+  sender_system_id: 245
+  sender_component_id: 191
+  source_timeout: 2.0
+  query_timeout: 1.5
+  poll_seconds: 1.0
+  max_px4_age: 2.0

@@ -1,0 +1,15 @@
+# PX4/MAVROS Backend 的转发设置与最终命令检查；不写入 PX4 参数。
+# mission_executor.yaml 配置任务状态机；本文件只约束实际数据/命令转发。
+# 同名频率、超时和预发送参数在两节点中独立生效，不互相覆盖。
+backend:
+  output_enabled: true       # 允许发布 EV/目标和转发模式/ARM 服务；可由 launch 同名参数覆盖。
+  simulation_transport: false # 仿真传输限制；true 时要求固定 loopback SITL 地址，可由 launch 覆盖。
+  rate_hz: 30.0              # 检查输入并向 MAVROS 转发数据/目标的循环频率，Hz；不是任务推进频率。
+  state_timeout: 0.3         # /uav/state/odom、/uav/state/health 及 EV 发送心跳的鲜活阈值，秒。
+                            # 不同于 Executor 的 state_timeout：这里检查 canonical 数据，不检查 PX4 local 位姿。
+  command_timeout: 0.3       # /uav/command/trajectory 的鲜活阈值，秒；过期后停止转发目标。
+  status_timeout: 0.5        # 接受 /uav/system/status 的鲜活阈值，秒；用于目标与 OFFBOARD/ARM 转发门控。
+  telemetry_timeout: 2.0     # 接受 FCU 状态和 landed 遥测的鲜活阈值，秒；用于实际转发前的检查。
+  prestream_seconds: 2.0     # 接受 OFFBOARD 请求前，实际连续向 MAVROS 转发有效目标的最短时长，秒。
+                            # 不是 Executor 的准备阶段计时；目标未通过转发门或流中断时，此计时重置。
+  max_attitude_thrust: 0.30 # Final normalized thrust limit for raw attitude commands.

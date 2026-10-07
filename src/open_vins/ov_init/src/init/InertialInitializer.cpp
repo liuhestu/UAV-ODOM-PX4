@@ -42,17 +42,10 @@ InertialInitializer::InertialInitializer(InertialInitializerOptions &params_, st
 
   // Vector of our IMU data
   imu_data = std::make_shared<std::vector<ov_core::ImuData>>();
-
-  // Create initializers
-  init_static = std::make_shared<StaticInitializer>(params, _db, imu_data);
-#ifndef __ANDROID__
-  init_dynamic = std::make_shared<DynamicInitializer>(params, _db, imu_data);
-#else
-  init_dynamic = nullptr;
-#endif
 }
 
 void InertialInitializer::feed_imu(const ov_core::ImuData &message, double oldest_time) {
+  std::lock_guard<std::mutex> lock(imu_data_mtx);
 
   // Append it to our vector
   imu_data->emplace_back(message);
@@ -79,6 +72,13 @@ void InertialInitializer::feed_imu(const ov_core::ImuData &message, double oldes
 bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covariance, std::vector<std::shared_ptr<ov_type::Type>> &order,
                                      std::shared_ptr<ov_type::IMU> t_imu, bool wait_for_jerk) {
 
+  // Snapshot under a short lock; static/dynamic initialization never blocks IMU input.
+  std::shared_ptr<std::vector<ov_core::ImuData>> init_imu_data;
+  {
+    std::lock_guard<std::mutex> lock(imu_data_mtx);
+    init_imu_data = std::make_shared<std::vector<ov_core::ImuData>>(*imu_data);
+  }
+
   // Get the newest and oldest timestamps we will try to initialize between!
   double newest_cam_time = -1;
   for (auto const &feat : _db->get_internal_data()) {
@@ -96,9 +96,9 @@ bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covaria
   // Remove all measurements that are older then our initialization window
   // Then we will try to use all features that are in the feature database!
   _db->cleanup_measurements(oldest_time);
-  auto it_imu = imu_data->begin();
-  while (it_imu != imu_data->end() && it_imu->timestamp < oldest_time + params.calib_camimu_dt) {
-    it_imu = imu_data->erase(it_imu);
+  auto it_imu = init_imu_data->begin();
+  while (it_imu != init_imu_data->end() && it_imu->timestamp < oldest_time + params.calib_camimu_dt) {
+    it_imu = init_imu_data->erase(it_imu);
   }
 
   // Compute the disparity of the system at the current timestep
@@ -137,15 +137,15 @@ bool InertialInitializer::initialize(double &timestamp, Eigen::MatrixXd &covaria
   bool is_still = (!disparity_detected_moving_1to0 && !disparity_detected_moving_2to1);
   if (((has_jerk && wait_for_jerk) || (is_still && !wait_for_jerk)) && params.init_imu_thresh > 0.0) {
     PRINT_DEBUG(GREEN "[init]: USING STATIC INITIALIZER METHOD!\n" RESET);
-    return init_static->initialize(timestamp, covariance, order, t_imu, wait_for_jerk);
+    StaticInitializer init_static(params, _db, init_imu_data);
+    return init_static.initialize(timestamp, covariance, order, t_imu, wait_for_jerk);
   } else if (params.init_dyn_use && !is_still) {
 #ifndef __ANDROID__
     PRINT_DEBUG(GREEN "[init]: USING DYNAMIC INITIALIZER METHOD!\n" RESET);
     std::map<double, std::shared_ptr<ov_type::PoseJPL>> _clones_IMU;
     std::unordered_map<size_t, std::shared_ptr<ov_type::Landmark>> _features_SLAM;
-    if (init_dynamic) {
-      return init_dynamic->initialize(timestamp, covariance, order, t_imu, _clones_IMU, _features_SLAM);
-    }
+    DynamicInitializer init_dynamic(params, _db, init_imu_data);
+    return init_dynamic.initialize(timestamp, covariance, order, t_imu, _clones_IMU, _features_SLAM);
 #else
     PRINT_ERROR(RED "[init]: DYNAMIC INITIALIZER not available on Android (Ceres Solver not included)\n" RESET);
 #endif

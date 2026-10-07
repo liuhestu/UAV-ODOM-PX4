@@ -1,8 +1,0 @@
-estimator_adapter:
-  ros__parameters:
-    openvins_imu_to_pixhawk_imu:
-      # t_PV: RealSense IMU origin expressed in the Pixhawk IMU ROS-FLU frame.
-      translation_xyz_m: [0.0, 0.0, 0.0]
-      # q_PV: rotates RealSense IMU vector components into Pixhawk IMU ROS-FLU.
-      # Storage order is strictly xyzw.
-      rotation_xyzw: [0.0, 0.0, 0.0, 1.0]

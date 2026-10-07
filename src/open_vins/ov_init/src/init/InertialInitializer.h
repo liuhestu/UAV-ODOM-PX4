@@ -23,6 +23,7 @@
 #define OV_INIT_INERTIALINITIALIZER_H
 
 #include "init/InertialInitializerOptions.h"
+#include <mutex>
 
 namespace ov_core {
 class FeatureDatabase;
@@ -34,9 +35,6 @@ class IMU;
 } // namespace ov_type
 
 namespace ov_init {
-
-class StaticInitializer;
-class DynamicInitializer;
 
 /**
  * @brief Initializer for visual-inertial system.
@@ -107,11 +105,8 @@ protected:
   /// Our history of IMU messages (time, angular, linear)
   std::shared_ptr<std::vector<ov_core::ImuData>> imu_data;
 
-  /// Static initialization helper class
-  std::shared_ptr<StaticInitializer> init_static;
-
-  /// Dynamic initialization helper class
-  std::shared_ptr<DynamicInitializer> init_dynamic;
+  /// Protect live input; initialize operates on a private snapshot.
+  std::mutex imu_data_mtx;
 };
 
 } // namespace ov_init

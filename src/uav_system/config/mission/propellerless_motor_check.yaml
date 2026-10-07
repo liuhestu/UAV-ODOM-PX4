@@ -1,0 +1,2 @@
+# Only run on hardware with propellers removed; no climb target.
+duration_seconds: 10.0

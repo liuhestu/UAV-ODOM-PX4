@@ -1,0 +1,6 @@
+# Deterministic scenario for takeoff/state-machine assertions.
+height: 0.5
+climb_rate: 0.15
+height_tolerance: 0.08
+hover_seconds: 5.0
+flight_timeout: 20.0

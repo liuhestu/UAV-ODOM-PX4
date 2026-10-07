@@ -1,0 +1,416 @@
+# 本地环境与当前验证
+
+架构、启动方式、任务/状态源扩展和终端状态见 [ARCHITECTURE.md](ARCHITECTURE.md)。本文件只保留本机环境、验证方法与当前结果，不累积旧版本流水。
+
+## Jetson 环境
+
+SSHFS 工作区直接编辑源码；构建和 ROS 检查在 Jetson 的 `/home/jetson/uav_odom_px4` 执行。使用 ROS1 Noetic，不混入 Humble，也不加载 `.legacy_catkin` 的旧构建环境。
+
+```bash
+ssh jetson-uav-odom 'cd /home/jetson/uav_odom_px4 && ./scripts/build.sh'
+```
+
+本机运行环境需要外部 RealSense 工作区和 `/usr/local/lib` 中的兼容库；项目 overlay 最后加载：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source /home/jetson/jin_ws/uav_ws/devel/setup.bash
+source /home/jetson/uav_odom_px4/devel/setup.bash --extend
+export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+```
+
+Jetson 的 `~/.bashrc` 已默认加载 Noetic、上述 RealSense 工作区和当前项目 overlay，并清理 Humble/yahboom 残留路径。新终端自动生效；现有终端执行 `source ~/.bashrc`。显式 `ros 2` 切换 Humble，`ros 1` 切回 Noetic/UAV。通过新交互 shell 的包查找及 `roslaunch --files` 检查，不启动节点。修改前备份为 `/home/jetson/.bashrc.before_uav_noetic_20261003_234810`。
+
+`--extend` 用于保留外部 RealSense 包路径。这是本机环境记录，不是其他机器的通用路径。依赖见 `requirements.txt`；本机曾使用 `px4_exp/.venv` 中的 pymavlink，若系统 Python 缺少该依赖，需明确所用解释器或 PYTHONPATH。
+
+## 软件验证
+
+在 Jetson 工作区根目录执行：
+
+```bash
+bash src/uav_system/scripts/run_checks.sh
+./scripts/build.sh
+source devel/setup.bash
+export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+python3 src/uav_system/test/verify_executor_wait.py
+```
+
+检查脚本包含数学、健康策略、协议、任务与执行状态机、服务替身、watchdog 和布局检查。隔离 ROS 脚本使用独立 master 11329，端口必须没有活动 listener；仅启动 mock 数据源与 Executor，不启动 MAVROS，也不连接实际 FCU。预期 ready/arm_ready=false、三任务 WAIT_SYSTEM、重复启动被拒绝；结束后清理本轮子进程。
+
+安装布局验证使用临时 DESTDIR 和隔离 Python 路径，确认模块来自安装目录、任务能加载、旧模块不被复制。源码只有 uav_core 保留 __init__.py；catkin 生成的开发空间入口不属于源码，不能据此判定源码目录整理失败。当前 setuptools 对命名空间包可能打印入口文件不存在的提示，需以实际导入结果判断。
+
+## 硬件验证边界
+
+启动 Executor 会在条件满足后自动请求 OFFBOARD 和 ARM。硬件/飞行动作、PX4 参数写入和固件刷写需要本次任务明确授权；只做软件检查时不要启动实机 Executor。
+
+- 防止重复启动相机、OpenVINS 或 MAVROS。已有外部进程时按架构文档使用 start_source/start_mavros，或调整源 YAML 的相机启动及 owned_nodes。
+- 当前 OpenVINS 的 calibrated/verified=true 来自用户对本机外参与世界对齐的确认，软件没有独立完成精确标定。新状态源或新安装必须重新验证；不能直接复制这些确认标志。相机图像尺寸、raw/rectified 与内外参匹配在 OpenVINS 源侧核对。
+- 本地 OpenVINS 曾修正静态 ZUPT 完成后的里程计发布时序；静止时有输出不证明运动轴向、漂移或标定准确。
+- PX4 Observer 只支持单 EKF，读取验证 EKF2_MULTI_IMU=0、SENS_IMU_MODE=1、SENS_MAG_MODE=1；不把缺失参数当零，也不自动写参数。运行 Observer 时避免同时使用 QGC MAVLink Console。
+- 用户约定程序控制任务，遥控器只保留 KILL。是否已经在 QGC 关闭遥控器 ARM，需要实际读取确认；程序不为恢复遥控器 ARM 而请求 POSCTL/MANUAL。
+- 任务运行中断连、飞控重启、源 session/估计器 reset 或人工接管后不续飞。故障定位并结束旧任务后，重新建立基础系统与新任务；start_source=true 管理的 OpenVINS 会随基础系统停止/启动，外部源不会。
+- 后续 SITL 必须提供随模拟机体运动的实际反馈，并分别验证任务控制、降落判定和失效保护；固定 mock 数据源不作为飞行反馈。
+
+## 当前验证结论（2026-10-06）
+
+| 范围 | 结果与边界 |
+|---|---|
+| 单元与结构检查 | 110 项通过，含调试架姿态/推力、目标互斥、实际模式/ARM 顺序、准备与飞行故障、断连/重启锁定、接管、正常降落和空中禁上锁 |
+| catkin 构建 | uav_system 及依赖共 4 个包增量构建通过 |
+| 隔离 ROS | 三任务 WAIT_SYSTEM、配置覆盖/冲突、健康诊断和重复启动拒绝通过；没有 MAVROS/FCU |
+| 安装空间 | 领域模块、三个任务与配置在临时安装空间可加载；无旧 hover/stand_attitude 任务 |
+| 无桨实机 hover 启动 | 2026-10-06 永久启用静态初始化后通过；真实 EV 接收/融合、OFFBOARD/ARM、保持约 5 秒、AUTO.LAND、DISARM、DONE；用户听到电机启动，结束 armed=false，输出回到 1000 |
+| SITL / 实际悬停或轨迹飞行 | 本轮未执行，软件验证不证明实际运动或落地判定成功 |
+
+本轮证据位于 Jetson：`/tmp/uav_rig_mission_checks.log`、`/tmp/uav_rig_mission_build.log`、`/tmp/uav_rig_mission_ros.log`；隔离 ROS 与安装目录见对应日志。这些是临时证据路径，不能保证长期存在。
+
+后续验证更新本节的日期、当前代码验证结果及未覆盖范围，不恢复按版本累积的历史流水。旧 `VALIDATION.md` 已删除。
+
+
+## 当前无桨电机测试状态（2026-10-06）
+
+用户确认电池已接、桨叶已卸，明确授权启动 hover，并要求正式 OpenVINS 参数永久生效，不再使用临时配置。本次直接修改 `src/open_vins/config/realsense/estimator_config.yaml`：try_zupt=true、init_dyn_use=false，其他估计器、外参和健康阈值不变。配置解析与布尔值检查及该文件 git diff --check 通过；YAML 修改无需重编译。此前 try_zupt=false 的试运行卡在初始化，已停止；其失败不代表当前结果。
+
+停止前一轮基础 launch 和独立相机 launch，确认退出后用 `uav_system.launch start_mavros:=false` 重建基础链，相机由正式源配置统一管理，已有 MAVROS 复用。没有传入 source_config/config_path/executor_config/mission_config 覆盖，不再使用 `/tmp/uav_bench_factory` 或 `/tmp/uav_hover_bench_source.yaml` 参数。日志和采集脚本仍在 /tmp，属于运行证据，不是配置文件。未写 PX4 参数或直接调用 ARM。
+
+静止约 20 秒后 OpenVINS 初始化成功并持续输出真实里程计，Adapter healthy=true；约 21 秒时 Observer received/fused=true，确认单 EKF 实例 0 的位置/高度融合，Supervisor ready/arm_ready=true、reasons=[]，地面 ON_GROUND。随后实际启动 `mission_executor.launch mission_source:=hover`，有效 hover_seconds=5.0、auto_arm=true。该任务固定确认时 PX4 local 位置，无爬升阶段。
+
+采集到的流程（相对任务采集开始）：PRESTREAM 约 3.70 秒；实际 armed=true、HOVER 约 8.16 秒；WAIT_LAND_MODE 约 13.18 秒；实际 AUTO.LAND 约 14.16 秒；WAIT_DISARM 约 14.22 秒；实际 armed=false 约 15.16 秒；DONE 约 15.19 秒。实际 HOVER 持续约 5.02 秒。前四路 RCOut 由 1000 升至约 1100–1102，约 14.29 秒回到 1000；用户随后确认听到电机启动声音，实际电机转动得到用户观察支持。
+
+25 秒采集结束时任务 DONE，FCU connected=true、armed=false、OFFBOARD、ON_GROUND，前四路输出 1000；ready/arm_ready=true、EV received/fused=true。结束后停止本轮 Executor，基础系统/相机/MAVROS保持运行。结束模式为 PX4 遥测确认的 OFFBOARD，不宣称 Executor 主动恢复了模式；本轮确实观察到正常降落 AUTO.LAND。新任务必须重新启动，不能恢复或自动重复本轮任务。
+
+正式配置从仓库加载、静止初始化、真实 EV 反馈/融合、目标预发送与实际 mode/ARM、短时保持、正常落地确认/上锁和电机输出响应已在此次无桨台架场景观察。未执行带桨、实际悬停/轨迹飞行或 SITL，不能据此宣称位置控制精度、运动中定位或飞行安全已验证。Jetson 系统日期显示 2026-10-03，与用户环境日期不同；未调整时钟。
+
+证据：Jetson `/tmp/uav_hover_static_system.log`、`/tmp/uav_hover_static_executor.log`、`/tmp/uav_hover_static_precheck.log`/`.json`、`/tmp/uav_hover_static_test.log`、`/tmp/uav_hover_static_result.json`。采集包含 raw/canonical/EV/local、实际状态、任务阶段、目标、MAVROS设定点和电机输出。外部 launch 日志使用轮转；运行 PID 后续需重新核对，不凭历史记录假设仍存活。未提交或推送。
+
+
+## 调试架任务与入口调整
+
+本轮仅实施代码、配置、文档及隔离软件验证，没有启动实机 Executor、写 PX4 参数或执行带桨动作。新增 `rig_attitude_hold`：固定平移调试架上的水平姿态/初始偏航保持，归一化推力默认 0.10，升/保持/降各 3/5/3 秒；默认值没有经过带桨回正能力验证。预发送为零推力姿态目标，实际 OFFBOARD/ARM 确认后才开始包络；结束/健康故障先零推力，鲜活地面确认后上锁，不进入 AUTO.LAND。人工接管、断连/重启仍锁定终止，禁止空中强制上锁。
+
+`hover` 重命名为 `propellerless_motor_check`，任务配置使用 duration_seconds；上节实机证据仍保留当时的 hover 名称，不能视为新姿态任务的硬件验证。模拟数据源与无桨任务通过 state_source/mission_source 区分，源配置统一移至 `config/state_sources/mock.yaml`。删除 mock_system.launch，模拟节点通过 source.nodes 直接交给 State Source Manager 管理。统一入口显式组合 mock 数据源和任务时，强制关闭 MAVROS、Observer、Backend 输出和自动 ARM。
+
+新增测试使用内存 ROS/服务替身，验证姿态类型、数值和推力限制、MAVROS scaling、零推力准备/故障处理、目标互斥和地面确认。隔离 master 11329 上验证三个任务等待、配置归一化和故意传 true 后 mock 数据源仍禁止硬件路径。实机 MAVROS raw attitude 转换、电机推力响应、带桨自稳及 SITL 尚未验证。
+
+当前隔离 ROS 证据目录：Jetson `/tmp/uav_executor_ros_9pchdy34`；安装空间验证：`/tmp/uav_rig_install_yjkYnp`（安装日志 `/tmp/uav_rig_mission_install.log`）。106 项检查、4 包增量构建、移动 mock 数据源配置后的隔离 ROS 检查及安装加载均通过。
+
+命名职责修正：propellerless_motor_check 仅为 Mission，由 mission_executor.launch 加载 src/mission/propellerless_motor_check.py 与 config/mission/propellerless_motor_check.yaml，使用已有真实 OpenVINS/NOKOV/PX4 状态。模拟里程计源独立恢复为 mock（state_sources/mock.yaml 的 source.nodes、mock_state_source.py），仅用于软件测试。任务不启动或模拟数据源。
+
+职责分离后的验证日志：`/tmp/uav_mock_source_separation_checks.log`、`/tmp/uav_mock_source_separation_build.log`、`/tmp/uav_mock_source_separation_ros.log`。
+
+删除 mock_source.launch：模拟节点启动信息直接写入 state_sources/mock.yaml 的 source.nodes，由 State Source Manager 通过 roslaunch API 管理；复杂源仍引用原有 launch，进程退出监测、重复节点检查及 start_source=false 不变。新增直接节点配置的正反例检查，未启动实机节点。
+
+直接源节点验证日志：`/tmp/uav_source_nodes_checks.log`（109 项通过）、`/tmp/uav_source_nodes_build.log`（4 包增量构建通过）、`/tmp/uav_source_nodes_ros.log`。
+
+无桨任务最终命名为 propellerless_motor_check，任务类 PropellerlessMotorCheck；同名 Python/YAML、加载测试、隔离 ROS 检查脚本及使用示例已同步。109 项检查、4 包增量构建、只读 roslaunch --dump-params 和新任务加载/5 秒计时检查通过。证据为 `/tmp/uav_motor_check_rename_checks.log`、`/tmp/uav_motor_check_rename_build.log`、`/tmp/uav_motor_check_rename_params.yaml`、`/tmp/uav_motor_check_rename_install.log`。本轮仅重命名与软件验证，未启动实际 Executor、ARM 或写 PX4 参数；未提交/推送。
+
+默认任务统一改为 propellerless_motor_check：mission_executor.launch、uav_system.launch、节点缺省参数和 Python 加载器均一致，起飞任务必须显式指定。保留当前任务 YAML 的 duration_seconds=10.0；测试读取配置并验证完成边界，避免把任务持续时间写死为 5 秒。110 项检查及 4 包增量构建通过。软件验证日志为 `/tmp/uav_default_motor_check_checks.log`、`/tmp/uav_default_motor_check_build.log`、`/tmp/uav_default_motor_check_ros.log`。本轮未重启实际基础系统、启动实机 Mission 或写 PX4 参数。默认仍可请求 ARM，仅限卸桨。
+
+
+## 本次 ARM 拒绝诊断
+
+用户明确授权按既有卸桨场景运行一次并检查原因。新增日志区分 Executor 本地门控、Backend 本地门控、MAVROS 服务异常和 FCU ACK 返回值；原有门控及单次请求策略保持。110 项软件检查及 4 包增量构建通过，日志 `/tmp/uav_arm_diagnostic_checks.log`、`/tmp/uav_arm_diagnostic_build.log`。
+
+启动前确认没有相机/MAVROS/任务进程，发现旧崩溃 OpenVINS 留下不可达的 /ov_msckf 注册，仅清理该失效注册；这一步没有启动 Mission 或 ARM。随后从正式配置启动 OpenVINS 基础链，约 52 秒时真实 EV 融合、估计器、通信和地面门通过。启动一次 propellerless_motor_check，预发送后主动请求 OFFBOARD，收到 command=176/result=0 并确认实际 OFFBOARD，再发送一次 ARM。
+
+Backend 明确转发了 ARM，FCU 1/1 返回 COMMAND_ACK(command=400,result=1)，即 MAV_RESULT_TEMPORARILY_REJECTED；MAVROS/Backend 均记录 success=false,result=1。请求已接收，没有 ACK 超时或重试；任务 BLOCKED，未进入电机运行阶段。
+
+捕获 MAVLink EVENT，并用包内 PX4 官方事件提取脚本生成定义、匹配事件 ID，确认 check_estimator_high_accel_bias 和 commander_arm_denied_resolve_failures。轴索引 0 的偏置约 -0.379516 m/s²，大于当时测试阈值 0.300000 + 不确定度余量 0.067116 ≈ 0.367116 m/s²。相关参数为 EKF2_ABL_LIM，事件里的 0.300000 是 PX4 的测试基准，不直接等同于参数值。其他事件包括无全局位置、无任务、无地面站连接等，不把其他模式的检查或提示全部当成 OFFBOARD 解锁的阻塞。项目 ready/arm_ready=true 不代表 PX4 原生解锁检查通过。
+
+结束确认 connected=true、armed=false、OFFBOARD、ON_GROUND，Executor 已停止；基础系统保留运行，PID 221886 为本次记录，后续应重新核对。没有写 PX4 参数、绕过检查、重试 ARM、带桨或飞行操作。本次不证明电机响应成功。
+
+证据在 Jetson：`/tmp/uav_arm_diagnostic_system.log`、`/tmp/uav_arm_diagnostic_executor.log`、`/tmp/uav_arm_diagnostic_trace.jsonl`、`/tmp/uav_arm_diagnostic_result.json`、`/tmp/uav_arm_diagnostic_events.jsonl`、`/tmp/uav_arm_diagnostic_decoded_events.json`。事件定义 `/tmp/uav_arm_diagnostic_px4_events.json` 由仓库源码只读提取，未写入飞控。采集程序在 /tmp，不覆盖正式配置。
+
+## 校准后基础系统未就绪排查
+
+用户报告重新校准 PX4 IMU 后 uav_system.launch 启动失败。读取最新日志发现基础节点已启动，旧任务始终 WAIT_SYSTEM，随后用户 SIGINT 退出。仅重启基础系统（start_mission_executor:=false）复现；未启动 Mission、发送模式/ARM 请求或写 PX4 参数。
+
+RealSense D435i 当前枚举为 USB 2.1，驱动拒绝两路 Infrared 848×480@30 Y8 配置。8 秒订阅观察收到 1565 条 camera/imu，双目图像和 OpenVINS odom 均未收到；source healthy=false，ready/arm_ready=false，PX4 connected=true、armed=false，实际模式 AUTO.LOITER（观测值，程序未请求该模式）。因此当前未就绪的直接原因是双目图像流未启动，不能归因于 PX4 加速度计校准。保持图像配置和标定参数，需恢复相机 USB 3 连接后再验证。
+
+本轮自建诊断基础系统已发送 SIGINT 停止，避免用户重新插接后重复启动。证据：Jetson /tmp/uav_base_restart_diagnostic.log。未执行电机任务或飞行。
+
+## 初始化重置基准与融合诊断修正
+
+用户询问如何解决再次启动 Mission 持续 WAIT_SYSTEM。读取实际状态确认此前 EV received/fused 已恢复，唯一阻塞为 Supervisor 锁定的 PX4 estimator reset；用户随后已退出基础系统和任务。没有发送 ARM、模式请求或写 PX4 参数。
+
+只启动基础链（start_mission_executor:=false）复现另一项启动误判：OpenVINS 尚未初始化时 PX4 保留旧 EV/aid 时间戳，Observer 的 received/fused=false 但 reset_valid=true；Supervisor 把该观察的重置计数当基准。约 20 秒恢复融合后计数变化，被锁定为 reset fault，导致显式重启基础链仍无法就绪。改为新 Supervisor 首次 received=true 且 fused=true 时才建立计数基准；建立后即使融合丢失，任何后续计数变化仍锁定，保留会话/重启终止策略，不自动恢复任务。
+
+增加各融合检查字段的失败原因、失败快照与计数变化日志，修正 Observer 失败时仍显示“fusion observed”的描述。SystemStatus reasons 提供明确 reset 故障和 EV detail，Mission WAIT_SYSTEM 日志显示健康阻塞项。未改变健康/融合阈值、ZUPT、相机外参或 PX4 配置。
+
+115 项检查通过，4 包增量构建通过。相机已枚举为 USB 3 5000 Mbps。修正后重启基础链，45 秒静态观察中约 25 秒起 ready=true，之后约 20 秒连续保持；EV received/fused=true、重置计数稳定，实际 armed=false。未启动实机 Mission 或重复电机试验；上次 ARM 后短暂融合失效的物理或估计原因尚未确定，不能由本次启动修正宣称解决。
+
+保留本轮基础系统运行（本轮 PID 449824，仅用于记录，操作前重新核对），没有 Mission。证据：Jetson /tmp/uav_ev_diagnostics_checks.log、/tmp/uav_ev_diagnostics_build.log、/tmp/uav_ev_diagnostics_system.log、/tmp/uav_ev_diagnostics_static.json、/tmp/uav_ev_baseline_fixed_system.log、/tmp/uav_ev_baseline_fixed_static.json。未提交或推送。
+
+## 解锁后健康失效：异步观察时间比较
+
+用户再次运行任务后要求定位失效项，本轮仅读取日志、修改软件并离线验证，没有重启实机节点、ARM、切模式或写参数。最近一轮 LINK_TEST 于 01:16:51.689 开始，01:16:59.453 因 readiness lost 故障终止，保持约 7.764 秒。
+
+01:16:59.412 的观察快照中，EV position/height fused=true、innovation_rejected=false，local 四项有效性均 true，cs_ev_pos/cs_ev_hgt=true，无惯性航位推算。唯一 EV 失败字段为 estimator_status_flags.timestamp：1517581895，比先前读取的 local.timestamp=1517581657 晚 238 微秒。观察器顺序读取五个异步发布的 topic，却使用 local 时间作为所有字段上限，因此误判正常较晚的状态发布为未来数据。该误判还使依赖地面 EV 证据的旧 estimator constant-position 位处理失效，造成第二个健康 FAIL。
+
+修正为使用同一观察中最新 publication timestamp 作为比较基准，同时显式检查 local timestamp 的年龄，保留 2 秒过期限制、融合/创新/模式和所有重置门控。新增异步 238 微秒及过期 local/aiding 回归；117 项检查与 4 包增量构建通过。将实际退出快照离线重放，结果 received=true、fused=true、failures=[]。证据：Jetson /tmp/uav_ev_async_clock_checks.log、/tmp/uav_ev_async_clock_build.log、/tmp/uav_ev_async_abort_snapshot.json。
+
+更早 01:14:05 的另一轮退出日志仅 estimator validity FAIL，EV 证据为 PASS、地面判定为非 ON_GROUND，不能把所有历史终止都归因于本次时间误判；当前回放也不证明带电机运行能完成 10 秒。现有后台观察器仍加载旧代码，需要用户结束任务并重启基础系统后，新代码才生效。本轮没有自动重复实机测试。
+
+## Mission 结果 INFO
+
+按用户要求，Executor 首次进入 DONE 时记录 INFO `MISSION SUCCESSFUL`，首次进入 BLOCKED/ABORTED/TAKEN_OVER 时记录 INFO `MISSION FAILED`。独立标记保证终止后的循环不会重复输出，保留现有状态/原因日志与进程生命周期。121 项检查及 4 包增量构建通过，含四种终止结果和重复循环回归；未启动实机 Mission、ARM 或切换模式。证据：Jetson /tmp/uav_mission_result_checks.log、/tmp/uav_mission_result_build.log。下一次启动 mission_executor.launch 生效，无需重启基础系统。
+
+## 调试架静止估计与地面判定耦合修正
+
+用户报告 rig_attitude_hold 在 RIG_RAMP_UP 阶段失败。本次读取 01:28:05 退出窗口日志：EV 融合 PASS、local 数据 PASS、估计器有效性 FAIL，同时 ON_GROUND 为 false；约 0.2 秒估计恢复，约 0.8 秒地面确认恢复。退出前曾出现 invalid covariance 警告，但退出当轮 Adapter 已健康，不能直接认定该警告触发任务故障。旧日志未保存各 MAVROS estimator flag，故不能确认该轮唯一具体 flag。
+
+源码核对发现另一项门控耦合：PX4 ekf_helper.cpp 设置 ESTIMATOR_CONST_POS_MODE 为 fake_pos 或 valid_fake_pos 或 vehicle_at_rest；本项目先前只在 grounded_ev=true 时允许该位。静止机体的实际 EV 融合已由 Observer 确认且 fake/dead-reckoning 全部排除时，不应再用落地状态解释这个旧位。改用有效当前会话 EV 证据消除歧义，保留全部姿态/位置/速度有效性和 accel_error 门；真实融合失效仍阻塞。起飞前 ON_GROUND、调试架完成/故障后的地面确认与禁止空中 DISARM 都保留。
+
+补充 estimator_failures 字段诊断到 SystemStatus reasons 和健康日志，后续可准确区分姿态、位置、速度、加速度或 constant-position 位失败。121 项检查和 4 包增量构建通过，含有效 EV/缺失 EV、全部关键 flags 翻转以及既有地面/故障处理回归。本轮没有启动实机节点、ARM、模式切换或参数写入；需要重启基础系统加载新健康逻辑，尚未重复无桨/带桨调试架任务。不宣称此次修正已解决所有估计器异常。日志：Jetson /tmp/uav_stationary_estimator_checks.log、/tmp/uav_stationary_estimator_build.log。
+
+## 调试架正常停止的平滑推力与零推力保持
+
+用户提供自紧桨在急停时飞脱的既往现象，明确要求修正程序中可避免的骤降。本轮仅修改软件与配置，没有带桨、电机运行、PX4/ESC 参数写入。rig_attitude_hold 正常降推力从线性改为 smoothstep（起止斜率为零），默认时长由 3 秒延长到 5 秒；新增 zero_thrust_seconds=2.0（旧自定义配置缺省同为 2 秒），以 RIG_ZERO_THRUST 保持零推力，再交公共地面确认/DISARM 流程。默认任务包络总时长为 3+5+5+2=15 秒，不含初始化/ARM/地面确认与服务确认。
+
+失联、模式接管、KILL/主动上锁和健康故障的停止策略不增加延迟或正推力；故障仍先零推力，鲜活 ON_GROUND 后才可上锁，禁止自动恢复。位置任务维持 PX4 AUTO.LAND，不注入手动推力或改写飞控参数。
+
+122 项检查和 4 包增量构建通过。回归验证正常推力单调下降、曲线端点斜率、零推力保持时段、正常地面上锁、未知/空中地面状态不强制上锁及既有故障立即零推力。日志：Jetson /tmp/uav_rig_soft_stop_checks.log、/tmp/uav_rig_soft_stop_build.log。未实测 RPM/ESC 制动；本修改只平滑指令，不能证明实际减速率或自紧桨固定可靠性，也不能保证紧急停机不松脱。启动新 Mission 时生效，无需重启基础系统。未提交/推送。
+
+## 正常停桨移至共享执行器
+
+按用户要求替代上一节 Mission 内的 5 秒/2 秒停止实现：新增 mission_executor/shutdown.py 的 ThrustStop，由公共 ExecutionController 统一处理姿态任务正常结束。Mission 仅报告工作结束，不再配置或生成降推力/零推力保持。公共 attitude_ramp_down_seconds=2.0、attitude_zero_thrust_seconds=0.5；RAMP_DOWN 从最后实际发出的目标推力开始，采用平滑曲线，再 ZERO_THRUST，结束后进入既有地面确认/DISARM。任务即使完成时直接返回零推力也不能跳过共享下降流程。rig 默认工作 3+5 秒，共享停止 2+0.5 秒，合计约 10.5 秒，不含准备/服务/落地确认。
+
+位置任务仍由共享执行器请求 PX4 AUTO.LAND，不把姿态推力包络混入位置控制。故障、接管、断连仍立即停止，不执行延迟下降；终止不恢复。新增停止中健康失效立即零推力、接管/断连不续发、任务零推力完成不跳过下降回归；125 项检查及 4 包增量构建通过。日志 Jetson /tmp/uav_shared_shutdown_checks.log、/tmp/uav_shared_shutdown_build.log。本轮未启动实际节点、电机或写参数；新 Mission 启动生效，无需重启基础系统。软件仍不保证 ESC 制动与自紧桨机械兼容性。
+
+## Jetson PX4 USB/MAVROS 连接修复（2026-10-07）
+
+PX4 通过 USB 插入 Jetson 后，设备正常枚举为 `/dev/ttyACM0`，稳定路径为：
+
+```text
+/dev/serial/by-id/usb-3D_Robotics_PX4_FMU_v5.x_0-if00
+```
+
+`jetson` 用户已属于 `dialout`，串口访问测试通过。MAVROS 首次启动立即退出时，日志中的直接原因是：
+
+```text
+liblog4cxx.so.10: cannot open shared object file: No such file or directory
+```
+
+Jetson 系统安装的是 `liblog4cxx.so.12`，兼容的 `liblog4cxx.so.10` 位于 `/usr/local/lib`；非交互式 `ssh/nohup` 启动不会自动继承交互式 shell 的库路径。因此启动 MAVROS 前必须显式加入：
+
+```bash
+source /opt/ros/noetic/setup.bash
+source ~/uav_odom_px4/devel/setup.bash
+export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+roslaunch mavros px4.launch fcu_url:=/dev/ttyACM0:57600
+```
+
+本次使用上述环境启动后，`rostopic echo -n1 /mavros/state` 验证为：
+
+```text
+connected: True
+armed: False
+mode: "AUTO.LOITER"
+```
+
+该验证只确认 Jetson 到 PX4 的 MAVLink/FCU 连接，不启动 Mission Executor，也不请求 ARM。
+
+
+## OpenVINS 初始化与 PX4 EV 就绪排查（2026-10-07）
+
+### 问题原因
+
+本轮将 OpenVINS 内部初始化、Adapter 输出健康、PX4 实际融合和 Observer 证据获取分别检查。仅启动 RealSense 与 OpenVINS、未启动 Adapter/MAVROS/任务时，仍复现 `init-s: unable to select window of IMU readings, not enough readings`。该报错要求初始化 IMU 首尾跨度至少为配置的 2 秒，且两个 1 秒窗口各有至少两条样本；低 disparity 已满足静止条件，不能用 Adapter 拒收解释这条内部报错。
+
+原始 `/camera/imu` 在启动时先向前跳 10.368150 秒，再回退 10.449598 秒。未来样本留在初始化缓存头部，265 条样本的首尾跨度反而是 -8.992743 秒，必须等待后续时间追上才能通过。后续三轮又分别出现约 54.158、9.639、9.108 秒的启动跳变。跳变时 Jetson ROS 时间与单调接收时钟正常前进：例如 IMU 跳 54.157875 秒时，两者只前进 0.103607/0.103597 秒。因此本轮捕获事件不是 Jetson 系统时钟同步跳变造成的；异常位于 RealSense 输出时间戳链路，尚未定位 SDK/驱动中的具体机制。Jetson 日历日期整体偏慢本身不会改变 IMU 样本之间的跨度。
+
+`PR: Unknown parameter to get: SENS_IMU_MODE` 是另一项问题：MAVROS `/param/get` 查询缓存，初始下载尚未完成时可能查不到飞控实际存在的参数。当前飞控实读 `EKF2_MULTI_IMU=0`、`SENS_IMU_MODE=1`、`SENS_MAG_MODE=1`，参数拉取收到 1120 项；同时实读 `EKF2_EV_CTRL=3`、`EKF2_HGT_REF=1`，未修改任何参数。Observer 在参数校验失败后无法查询融合证据，会让 EV received/fused 检查失败；不能仅凭这种失败就断言 PX4 没有融合。
+
+### 解决方法
+
+OpenVINS 增加一次性启动 IMU 缓冲：非有限/负时间戳、重复/回退时间戳或相邻时间戳间隔超过 100 ms 时丢弃候选窗口重新收集；连续覆盖 `init_window_time + 0.10 s`（当前 2.1 秒）后才送入估计器。保留原始时间戳与测量值，原有 2 秒及半窗口初始化检查不变。接收缓存加锁，异步初始化使用私有快照，避免与 IMU 接收线程同时修改同一 vector。没有修改 RealSense 驱动、离线标定、Adapter 时间映射或 PX4 时间同步。
+
+Observer 在首次参数检查前调用只读 `ParamPull(force_pull=false)` 等待初始下载完成，随后继续严格校验三个单 EKF 参数。FCU 断连/遥测过期或参数缺失时重新等待；保留原有融合、创新拒绝、有效性、时效和重置门控，未增加参数 set/push、模式切换或解锁操作。
+
+整理后删除临时 `[init-imu]`/`[init-trim]` 周期统计及计数变量，保留限频的简短窗口不足日志和启动时间异常/成功事件。PX4 完整融合与重置快照降为 DEBUG，正常融合状态仅输出简短 INFO；融合失败与重置仍为 WARN 并保留关键字段。健康报告在 `ready && arm_ready` 时使用 INFO，否则使用 WARN，实际检查结果不变。`PX4 system_status=0` 的 standby/active 检查仍为 diagnostic only，其 FAIL 不独立阻止就绪。
+
+### 验证结果
+
+以下为本轮精简日志前完成的实测与回放结果，日志整理后没有重新启动硬件：
+
+| 验证 | 结果 |
+| --- | --- |
+| 异常 IMU 序列回放 | 识别向前跳变及回退，随后接纳 407 条样本、跨度 2.10147 秒；采集相对时间 8.66801 秒即可接纳，旧初始化直到 19.08873 秒才有 odom |
+| 已有启动缓冲回归 | 正常序列、固定 ±0.7 秒偏移、样本数值/时间戳保持、跳变/回退、断流、非法与重复时间戳、接纳后旁路均通过 |
+| 独立源实机启动第 1 轮 | 首次 IMU 到首次 odom 2.377 秒，随后约 200.35 Hz，输出时间戳回退 0 次 |
+| 独立源实机启动第 2 轮 | 首次 IMU 到首次 odom 2.387 秒，随后约 200.36 Hz，输出时间戳回退 0 次 |
+| 独立源实机启动第 3 轮 | 首次 IMU 到首次 odom 2.409 秒，随后约 200.38 Hz，输出时间戳回退 0 次 |
+| 包含 MAVROS 的基础系统全新启动 | 参数下载 1120 项；约 12.34 秒 EV received/fused/reset_valid=true，12.35 秒 ready/arm_ready=true、reasons=[]；45 秒采集剩余期间保持通过，armed 始终 false；没有 Unknown parameter 错误 |
+
+三轮源检查各采集约 23 秒初始化后的 odom，接收年龄中位数约 4.3 ms。第二轮启动附近短暂出现 odom 比 ROS 时间领先约 56 ms，故独立源检查只证明初始化恢复和持续输出；Adapter/PX4 融合以随后完整基础系统的观察为依据。基础系统使用隔离 master 11339、正式 OpenVINS 源配置，没有 Mission Executor。65 秒有界启动结束时的 listener timeout 位于关闭尾部，不作为 45 秒采集期内的融合故障。所有本轮验证启动的节点均已停止。
+
+### 验证边界与构建注意事项
+
+启动缓冲只在首次接纳前生效，不处理接纳后或飞行中的时间跳变；不得用自动时间对齐掩盖后续故障。本轮没有实施 `odomimu -> Jetson` 的动态输出时间校准，没有写 PX4 参数、ARM、电机任务或飞行。系统就绪与 EV 位置/高度融合通过不证明实际悬停、yaw 控制或失效降落可靠性。
+
+Jetson 构建目录曾包含时间戳晚于当前系统时间的产物，造成 catkin 返回成功但跳过新代码。本轮删除受影响的生成对象、库和可执行文件后重编译，并检查产物内的诊断字符串确认修复实际进入二进制。日志精简后的检查结果记录在下节；实测数据不能作为精简后代码再次运行的证据。
+
+证据均在 Jetson：`/tmp/ov_init_baseline*`、`/tmp/ov_init_diagnostic_compiled*`、`/tmp/ov_init_three_starts/`、`/tmp/ov_init_fix_build.log`、`/tmp/uav_px4_param_fix_startup.log`、`/tmp/uav_px4_param_fix_monitor.log`/`.json`。这些是临时文件，可能随清理失效；记录日期为 2026-10-07，不把 Jetson 当时的日历时间视为实际验证日期。
+
+
+### 日志整理后的检查
+
+本次仅整理代码与记录，未重新启动相机、MAVROS、基础系统或任务。两个 Python 节点语法检查通过；静态检查确认完整 snapshot 只使用 DEBUG，健康报告根据 ready/arm_ready 选择 INFO/WARN。受影响的 ov_init 两个 C++ 对象与共享库已删除后重新编译，ov_core/ov_init 两包构建成功；产物检查确认简短窗口日志存在，临时 `[init-imu]`、`[init-trim]` 日志已移除。Git 空白检查通过，没有新增或运行单元测试，保留已有启动缓冲与融合证据回归用例。本轮新增的两份独立排查文档已归并到本节并删除。
+
+构建证据：Jetson `/tmp/uav_diagnostic_cleanup_build.log`。基础系统下一次启动会加载精简后的节点和库；上面的三轮源启动及 45 秒基础系统观察均为精简前记录。
+
+## OpenVINS 协方差修复与航向异常记录（2026-10-07）
+
+### 问题原因
+
+修复前的带桨任务实际升高约 0.3 m 后保护降落。Adapter 首先在坐标变换前拒收 OpenVINS 原始协方差：pose/twist 最大非对称约 1.04e-6 / 3.98e-6，超过 1e-6 阈值，随后健康状态丢失。当前变换雅可比的有限差分误差约 2.51e-12 / 7.35e-13，1172 条匹配协方差回放误差为 0，未发现 Adapter 变换公式错误。原始矩阵归一化非对称差最高约 7.34%，不能视为普通 double 舍入尾差。
+
+OpenVINS 相机线程更新共享 EKF 状态，IMU 线程同时复制传播缓存。受控实验直接调用实际库，在 EKF 更新上三角、恢复下三角之间暂时停顿：中间矩阵与缓存复制的非对称差均为 0.0735711，fast propagation 输出差为 0.0281118；完整更新后的差为 0，最小特征值为 0.0009091。这验证了未同步读取能够把部分更新矩阵带到输出。实验使用合成状态并控制读取时机；静止地面诊断没有自然复现超限，历史 bag 也没有内部状态，因此不能逐条确认旧异常的内部读取时刻。
+
+修复前证据：`flight_logs/yaw_run_QCGPYt/round2/` 中的 `analysis.json`、`adapter_math_check.json`、`flight_trace_0.bag`、`px4.ulg`。该轮 PX4 1.17.0 ULog 未记录航向重置，不能把它与后续重置混为同一事件。
+
+### 解决方法
+
+相机更新完整结束后发布不可变状态快照，包含同代时间、IMU 均值、15×15 协方差、时间偏移、IMU 标定和最老 clone 时间。高频传播使用快照，快照交换与传播缓存分别加短锁，缓存按快照身份刷新。普通相机、ZUPT、模拟和 groundtruth 初始化路径均接入；传播公式和启动 IMU 缓冲保持原行为。
+
+相机后台线程按值捕获 IMU 时间，消除对回调局部变量的引用；跨线程就绪和移动状态使用 atomic。Adapter 的非对称阈值、非有限与非半正定检查保留。生产源码中的测试停顿、逐帧矩阵日志和诊断开关已移除；本次整理删除两个临时快照测试文件及其运行说明，已完成的测试结果仍保存在证据目录。
+
+### 验证结果
+
+以下均为修复完成后、此次代码与文档整理前取得的结果。证据根目录为 `flight_logs/covariance_fix_zxBkdL/`。
+
+| 检查 | 结果 | 证据文件 |
+| --- | --- | --- |
+| 受控并发机制复现 | 完整更新正常；读取中间矩阵使缓存与输出不对称 | `controlled_partial_summary.json` |
+| 传播数学一致性 | 默认与非默认标定各 150 组，旧、新均值及协方差最大差均为 0 | `math_comparison.json`、`math_calibrated_comparison.json` |
+| 并发快照检查 | 1 写线程、4 读线程；6000 次一致性检查、5999 次成功传播，失败 0；旧快照不变，未发布修改不可见 | `snapshot_regression.log` |
+| Adapter 保护 | NaN、无穷、负方差、非半正定、不对称超限均拒收，合法矩阵通过 | `check_adapter_protections.json` |
+| 修复后地面回放 | 8694 条 raw 无拒收；8687 条匹配 canonical 的协方差回放误差 0 | `fixed_adapter_replay.json`、`fixed_ground.bag` |
+| 完整基础链 | 就绪后观察 65.85 秒，无 ready/arm_ready 丢失；采样的 EV received/fused/reset_valid 均通过，armed 始终 false | `fixed_full_system_summary.json` |
+
+删除受影响对象后 `ov_msckf` 构建成功，并以进程加载路径和库符号确认新代码实际运行；构建记录与摘要为 `snapshot_fix_build.log`、`fixed_build_manifest.sha256`。ROS1 已构建运行，ROS2 的时间捕获修正未在本机编译；并发检查覆盖目标路径，未运行 ThreadSanitizer。
+
+编译结束后的两轮静止地面对比，采用相同基础链配置、稳定采样段各约 41 秒：
+
+| 指标 | 旧库 | 修复库 |
+| --- | --- | --- |
+| raw 接收频率 | 200.353 Hz | 200.331 Hz |
+| raw stamp 年龄中位数 / p99 | 15.338 / 44.982 ms | 15.567 / 44.897 ms |
+| canonical 接收频率 | 200.325 Hz | 200.191 Hz |
+| canonical stamp 年龄中位数 / p99 | 17.433 / 46.936 ms | 17.600 / 47.076 ms |
+
+未观察到明显性能退化。接收间隔 p99 两轮均约 45 ms，平均 200 Hz 包含突发到达；stamp 年龄包含传感器时间与消息链路，不等同于计算耗时。统计见 `baseline_idle_summary.json`、`fixed_ground_summary.json`。
+
+#### 带桨验收
+
+用户确认就位并授权一次任务后，实际升高约 0.5 m，飞行与降落平稳。TAKEOFF 为 ROS 1790877087.717248，HOVER 为 1790877096.625715；1790877097.491004 开始保护降落，1790877100.839056 确认落地。
+
+TAKEOFF 至 ABORTED 窗口共 2629 条原始 odom，最大非对称为 3.2526065e-19，超限和非有限数均为 0，最小对称部分特征值为 4.5572685e-6；261 条 Adapter health 全部通过。退出原因仅为 PX4 估计器重置：heading reset counter 1→2，delta_heading=0.04087 rad（约 2.34°），其余记录的重置计数不变，退出时 EV 位置/高度融合仍通过。
+
+按用户验收条件“实际带桨 Mission 不因协方差异常退出，允许其他原因失败”，协方差修复验收通过；任务最终仍为 MISSION FAILED，悬停约 0.87 秒。末条遥测为 armed=false、ON_GROUND，验收轮全部节点已停止，无自动重试，未写 PX4 参数或刷固件。
+
+证据位于 `flight_acceptance.kbhjhR/`，包括 `acceptance_analysis.json`、`flight_trace.bag`、`mission.log`、`system.log`、`yaw.jsonl`。任务时间线来自实际 mission.log；bag 未收到 `/uav/mission/status`，不能把缺失话题当作已记录。该轮未下载新的 PX4 ULog，重置结论来自 Observer 实读计数和系统故障日志。
+
+### 排查阶段：PX4 航向重置
+
+用户随后自行运行一轮：ROS 1790878328.433852～1790878328.500528，PX4 local yaw 从 1.979759 跳到 1.200158 rad，约 44.7°。基础系统在 1790878328.925773 报告 heading_reset_counter=3、delta_heading=0.77951 rad；源、Adapter、canonical、EV 发布与融合均 PASS，唯一故障为 PX4 estimator reset。随后任务保护降落。证据为 Jetson `~/.ros/log/8ad0e338-bdc3-11f1-b202-f9058410b324/rosout.log` 和对应节点日志。
+
+该轮退出由航向重置触发，不能据此认为协方差修复失效。日志中的估计航向跳变不等同于实际机体转动；当时重置的触发机制和历史 yaw 突转尚待 PX4 ULog 排查；后续 ULog 及参数验证见下文。对这轮的判断来自健康检查日志，没有完整原始协方差 bag 的逐条统计。
+
+排查阶段曾使用 `yaw_diagnostics.py` 和 `/uav/px4/observer_snapshot` 生成诊断记录；它们已在后续生产代码整理中移除，旧 `yaw_diagnostics_file` launch 参数不再支持。已有 JSONL、旧话题 bag 和验证结果仍保留为历史证据，不能据此认为当前节点仍发布完整快照。当前采集使用 ROS bag 与 PX4 ULog，运行必需的 `/uav/px4/ev_status`、健康状态和简短重置告警保持有效。
+
+此次整理只删除临时测试、精简注释和文档，静态检查删除项引用、诊断标记及补丁空白；未新增或运行测试，未构建、启动硬件或执行任务。`flight_logs/` 的原始记录及归档证据保留，构建摘要对应此前验证的版本。
+
+
+## PX4 航向重置 ULog 排查（2026-10-07，修复验证进行中）
+
+### 日志匹配与触发证据
+
+指定下载日志 ID 348（726788 字节）和 349（725565 字节），两者均完整、无记录的 dropout，固件 hash 均为 `d6f12ad1c4f70ad3230afd7d86e971421e02fef4`。原生解锁/离地/重置/降落顺序、重置量和时长分别对应此前约 2.34° 与约 44.7° 的两轮任务，不依赖“最新日志”或 Jetson 日历时间判定。ID 347 的大小与已有协方差失败轮 ULog 一致，作为关联对照。
+
+两轮 reset 分别在 PX4 boot time 4134.821584 / 5366.585259 秒，delta_heading 为 0.0408703 / 0.7795172 rad。重置前最近记录的磁融合成功时间分别为 4127.570777 / 5359.364396 秒；差约 7.25 / 7.22 秒，包含 EKF 延迟及日志采样差。磁力计 Y 轴 test_ratio 约 3.19 / 3.16（超过 1），创新被拒绝；EV position/height 仍融合，EV yaw 未融合，GNSS position/velocity 与 auxiliary global position 均未启用。重置附近 mag_aligned_in_flight 变为 true，随后由 mag heading 切换到 mag 3D。
+
+匹配固件源码中 `reset_timeout_max=7000000 us`；磁融合超时且无 North/East 辅助时调用磁状态与航向重置。该固件 `isNorthEastAidingActive()` 仅包含 GNSS position、GNSS velocity、auxiliary global position，不包含 EV position。因此 EV 位置融合正常，并不能阻止此磁融合超时重置分支。两轮 ULog 与该分支条件和时序一致。尚未确定磁创新拒绝来自物理磁干扰、标定、初始航向/磁场估计还是其他输入问题，不能把它直接写成磁力计硬件故障。
+
+本轮没有新增飞行。只读地面基础链 ready 持续约 52.42 秒，canonical yaw 变化范围 0.000480 rad，yaw 方差约 0.000404～0.000431，armed 始终 false。VIO canonical yaw 接近 0，PX4 ROS yaw 约 2.428 rad；VIO 使用启动时局部航向基准，不能把两者的常量偏差直接视为视觉错误，启用 EV yaw 时需在地面完成新航向参考对齐。
+
+### 下一项修改候选与授权边界
+
+实读当前 `EKF2_EV_CTRL=3`、`EKF2_MAG_TYPE=0`、`EKF2_HGT_REF=1`、`EKF2_EV_NOISE_MD=0`。拟单项将 `EKF2_EV_CTRL` 从 3 改为 11，保留位置/高度融合并启用 bit 3 的 EV yaw；其余参数和重置保护不变，回滚值为 3。先取得明确参数授权，再以未解锁地面数据验证 EV yaw 融合、地面对齐、稳定性与保护行为；通过后另行取得当轮带桨授权。该候选已按用户授权实施，地面结果见下节；带桨验证仍待当轮授权。
+
+源码依据为 PX4 官方上述 commit 的 `mag_control.cpp`、`common.h`、`estimator_interface.cpp` 和 `params_external_vision.yaml`；本地 firmware 源码 HEAD 不同，未用其版本替代实际固件。证据目录：`flight_logs/yaw_reset.GGa7lz/`，含两份 `.ulg`、下载记录、`reset_comparison.json`、`ground_and_parameter_baseline.json` 和地面 JSONL。该轮未写 PX4 参数、修改保护或请求 ARM。
+
+
+### 授权启用 EV yaw 后的地面验证
+
+用户明确授权参数修改与地面验证后，先确认 connected=true、armed=false，将 `EKF2_EV_CTRL` 从 3 改为 11，ParamSet 成功且 ParamGet 读回为 11。`EKF2_MAG_TYPE=0`、`EKF2_HGT_REF=1`、`EKF2_EV_NOISE_MD=0` 保持原值；回滚值为 `EKF2_EV_CTRL=3`。参数仍保留 11，不自动回滚。
+
+先观察视觉航向地面对齐，再启用 Observer：有效观察 61.84 秒，EV yaw/position/height 融合均启用，reject_yaw=false、cs_ev_yaw_fault=false，heading reset counter 保持 5，PX4 与 canonical yaw 最大差 0.002124 rad（约 0.122°），系统 ready/arm_ready 持续通过。随后完全停止该轮节点，用正常 `uav_system.launch state_source:=openvins` 启动方式复查：就绪后观察 60.94 秒，609 条诊断采样均 EV yaw active，重置计数保持 7，无就绪丢失，最大 yaw 差 0.000746 rad（约 0.043°）。地面对齐阶段发生的重置与稳定观察期区分，不将绝对计数增长当成空中故障；正常启动未触发重置故障锁存。
+
+两轮 armed 始终 false，没有启动 Mission。第一轮 bag 中 18330 条 raw 和 8859 条 canonical 的 pose/twist 协方差最大非对称为 1.0842e-18，非有限数为 0。启动初期有 waiting for odometry/stale 报告，不能把它们计为稳定期拒收；未出现协方差超限。停止尾部的 Observer listener timeout 与遥测过期不计入稳定观察窗口。
+
+这只证明本机地面对齐、EV yaw 融合、就绪与稳定性通过，尚未验证带桨起飞时不再出现重置或实际转向；最终完整任务验收仍未完成。现有重置即保护降落逻辑未修改，未新增生产代码或关闭检查；所有本轮节点与记录器已停止。
+
+证据目录：`flight_logs/yaw_reset.GGa7lz/ev_yaw_ground.GrRan9/`，含 `parameter_change.json`、`ground_alignment_summary.json`、`standard_startup_summary.json`、`ground_covariance_summary.json`、两轮 JSONL/启动日志和 `ground_trace.bag`。参数记录保留原值、新值与读回结果。
+
+
+### EV yaw 带桨任务完成，但发现实际高度验收缺口
+
+用户确认就位并明确授权一次带桨任务后，正式配置仍为 height=0.6 m、hover_seconds=15。TAKEOFF 为 ROS 1790883383.765636，HOVER 为 1790883393.139012，WAIT_LAND_MODE 为 1790883408.171689，DONE 为 1790883412.748101；悬停阶段持续 15.033 秒，日志为 MISSION SUCCESSFUL。落地与解除武装均确认，无自动重试。
+
+本轮 bag 的 29 次 Observer 快照均 EV yaw active，heading reset counter 始终为 9，系统就绪未丢失、Adapter 无 unhealthy；5773 条任务窗口 raw 协方差最大非对称 7.59e-19、无非有限元素。指定下载 ID 350（1196879 字节）并匹配本轮原生任务事件，ULog 时长 30.805 秒，无记录的 dropout，固件 hash 与前两轮相同。原生 heading reset counter 9、z reset counter 1 均未变。该轮没有复现先前磁融合超时导致的 yaw reset；它不证明所有后续飞行都不会重置。
+
+用户飞行中反馈“感觉有 1 m 多”。按起飞时刻基准比较，任务目标增量为 0.6 m，PX4 ROS odom 最大增量 0.6184 m，canonical VIO 最大增量 1.2024 m，raw VIO 为 1.2056 m；因此不能把任务日志 SUCCESSFUL 当作真实 0.6 m 高度验收通过。用户反馈为目测，尚无独立尺量；VIO 的米制尺度也未在本轮独立验证。
+
+原生 ULog 确认 `EKF2_EV_CTRL=11`、`EKF2_HGT_REF=1`、baro 与 EV height 同时融合且未记录高度创新拒绝。EV 高度偏置从 -5.01056 m 变为 -5.75887 m，变化范围 0.74831 m；EV height aid observation 是经过偏置修正的量，不能当作原始视觉高度。匹配固件参数定义中 HGT_REF 的 1 为 GPS、3 为 Vision，且标记 reboot_required=true；非视觉参考路径会初始化并估计 EV 高度偏置。这些证据指向高度融合/偏置估计，不能简单归因于把 height 配成 1 m 或重复增加了固定坐标偏移。
+
+下一项建议单因素将 `EKF2_HGT_REF` 从 1 改为 3，保持 EV_CTRL=11、气压计配置和保护逻辑不变，回滚值为 1。须先取得参数修改及飞控重启授权，重启后只做地面验证：确认 PX4 与 VIO 的相对高度一致、偏置行为、就绪与 yaw 融合；后续带桨高度验收需独立地面高度标尺和新的当轮授权。此建议尚未实施，不能宣称高度问题已修复。
+
+证据目录：`flight_logs/yaw_reset.GGa7lz/ev_yaw_flight.OF8N8N/`，含 `flight_analysis.json`、`ulog_analysis.json`、`px4_log_350.ulg`、ROS bag/JSONL 与实际任务日志。默认 ULog 未记录 vehicle_visual_odometry 或独立 EV yaw aid topic，原始视觉轨迹采用 ROS bag，不伪造缺失记录。本轮全部后台节点与记录器均已停止；实际高度 0.6 m 的最终验收仍未完成。
+
+
+## EV_CTRL=11、HGT_REF=3 两轮带桨验证（2026-10-07）
+
+用户授权两轮实机 Mission；确认飞控未解锁后将 `EKF2_HGT_REF` 从 1 改为 3，保留 `EKF2_EV_CTRL=11`，两项均读回确认。飞控接受 reboot 请求，重启后参数仍为 11/3，native 时间回到约 96 秒。地面就绪观察约 55.73 秒，PX4 与 canonical 高度最大差 0.00246 m，armed 始终 false。每轮均确认就位和就绪，只启动一次任务；起飞目标仍为相对 0.6 m、悬停 15 秒。
+
+| 项目 | 第一轮 | 第二轮 |
+| --- | --- | --- |
+| Mission 结果 | SUCCESSFUL、DONE、已落地并解除武装 | SUCCESSFUL、DONE、已落地并解除武装 |
+| 悬停时长 | 15.033 s | 15.034 s |
+| PX4 最大相对高度 | 0.652 m | 0.624 m |
+| canonical VIO 最大相对高度 | 0.686 m | 0.645 m |
+| 任务窗口 heading reset counter | 4，未变化 | 10，未变化 |
+| 就绪丢失 / Adapter unhealthy | 0 / 0 | 0 / 0 |
+| raw 最大协方差非对称 | 2.85e-19 | 3.52e-19 |
+
+上述高度为估计轨迹峰值，非独立尺量；两路峰值不必发生在同一瞬间。用户确认第一轮实际高度很接近 0.6 m、飞行平稳、轻微漂移不持续、降落稍快；第二轮反馈“很正确”。按用户要求保留当前参数，未调整控制增益、降落速度或任何保护逻辑；未启动第三轮。
+
+第一轮 ULog ID 351（1122436 字节）完整下载，固件 hash 仍为 d6f12ad1c4f70ad3230afd7d86e971421e02fef4，原生参数确认 11/3；heading reset counter 4 与 z reset counter 3 均不变，EV yaw/height 标志均启用，无 yaw 创新拒绝。该日志有 1 个 dropout，不能宣称原生采样全程无缺口；日志未包含 estimator_ev_pos_bias，不能据缺失话题伪造“偏置为零”的实测。第二轮 ULog ID 352 应为 1170846 字节，下载到 590490 字节时基础链的 300 秒有界运行结束，下载失败，仅保留 `.partial`；它不用于第二轮完整原生日志结论。第二轮结果来自已完成的任务日志、ROS bag、JSONL 和用户反馈。用户要求收尾后，没有重新启动下载或硬件。
+
+第一轮准备会话曾因前一个 ROS master 退出而中断，尚未启动 Mission；保留 preparation_failed 文件后重新建立基础链，不计作额外飞行。第二轮使用独立 master 11349，两个测试记录分目录保存。两轮均未复现此前协方差拒收、空中航向重置或约一倍高度差异；这两轮实测不代表所有工况与视觉失效行为均已验证。
+
+证据目录：`flight_logs/ev_height_tests.L4TGdP/`，含参数修改记录、ground/summary.json、round1/round2 的完整 ROS bag、JSONL、任务/系统日志和 flight_analysis.json；第一轮另有完整 px4_log_351.ulg/ulog_analysis.json，第二轮保留下载失败记录。所有本轮后台节点与记录器已确认停止，PX4 参数维持 `EKF2_EV_CTRL=11`、`EKF2_HGT_REF=3`。
+
+
+## 专项诊断清理与软件验证（2026-10-07）
+
+在两轮起降验证后，按用户选择删除专项 yaw JSONL 记录器、Mission 的额外 yaw 对照日志，以及 `/uav/px4/observer_snapshot` 完整诊断话题、逐项查询时间记录和完整状态 DEBUG 打印。同步删除 launch 的 `yaw_diagnostics_file` 参数、节点和 CMake 安装项；现有受保护的 catkin 旧包装清理名单增加该节点，确认 devel 包装入口已移除。该参数和话题是本次明确移除的诊断接口，旧启动命令需去掉该参数。
+
+生产逻辑继续保留 PX4 EV Observer 的五项只读查询、单 EKF 参数下载等待、时间/融合有效性判定、重置计数与简短告警、EvStatus 输出及健康/任务状态日志。初始化和协方差状态快照修复、任务流程、Backend、watchdog、空中禁上锁等运行保护未修改；PX4 参数及全部生产 YAML 未修改。`test/` 通用单元测试、mock 数据源和软件等待验证入口逐文件与基线核对一致；历史 JSONL、ROS bag、ULog 与第三方目录保留。
+
+运行统一 `run_checks.sh`：125 项测试，记录 24 处失败（包含子测试），无导入或执行错误。另将当前提交 648d0ce 导出到临时目录，用隔离的 Python 导入路径运行同一套测试，仍为 125 项、24 处失败；失败用例名称与断言消息均一致。因此本次清理没有新增这些失败，但不能将软件检查报告为全绿。现有失败涉及任务时序和姿态推力等断言，包括测试预期 0.1 而当前任务输出 0.25 的情况；这些既有测试/配置适配问题留作单独维护，未通过更改生产参数或删除用例掩盖。
+
+`catkin build uav_system --no-deps --force-cmake --no-status -j2 -p1` 单包构建成功（约 6.2 秒），其他包未重建。删除源码、生成包装入口、launch 与安装引用检查通过；飞书《五、PX4+OpenVINS》当前相关目录已折叠，全文未发现专项记录器或完整快照引用，因此同步核查无需重新改写。当前推荐记录方式为 ROS bag 加匹配轮次的 PX4 ULog，示例见 ARCHITECTURE.md 的“生产日志与验证记录”。
+
+验证记录：Jetson `/tmp/uav-diagnostic-cleanup-e41nq9t4/` 中的 checks.log、checks_isolated.log、baseline_checks_isolated.log、test_comparison.json、build.log、build_final.log。最终单包重建成功，并确认 devel、生成 installspace 和 atomic_configure 中均无已删除节点入口；仅清理了该节点的构建缓存。临时文件可能随系统清理失效。本次只进行了代码/文档整理、软件测试和单包构建，没有启动相机、MAVROS、Mission、ARM 或新一轮实机测试。
+
+
+## 通用测试与实机参数解耦（2026-10-08）
+
+专项诊断清理后发现的 24 处测试失败（含子测试）已定位为测试输入与断言不一致：18 处起飞流程记录仍假设 0.5 m、0.15 m/s、较短悬停及 20 秒起飞超时，而 helper 实际读取已调为 0.6 m、0.2 m/s、15 秒和 30 秒的生产 YAML；另 6 处调试架测试使用 0.10 推力、3 秒升推力和较短保持的断言，却加载了 0.25 推力、1.5 秒升推力、100 秒保持的生产配置。它们不是单包构建失败，也不否定已完成的实机任务。
+
+新增 `test/fixtures/` 中三份固定配置：公共 Executor、takeoff_hover_land、rig_attitude_hold。行为测试通过测试 helper 显式传入这些 YAML，仍使用真实生产任务工厂与加载器；移除原 helper 无效的 config 参数。状态机/运行器/调试架测试不再因实机调参改变测试场景。原有测试方法和断言逐方法 AST 核对保持一致，没有删除失败用例或放宽断言。
+
+新增两个回归用例：行为测试不得读取生产配置且公共测试配置每次独立读取；三种实际任务的当前生产配置能通过真实加载器验证并产生 TaskUpdate，不固定其可调数值。测试配置不安装为实机配置，不用于 ROS Mission 运行。生产源码、全部 YAML、launch 和 CMake 与本次修改前的内容哈希核对一致。
+
+运行统一 `run_checks.sh`，共 127 项测试全部通过，无失败或错误，Git 补丁空白检查通过。记录为 Jetson `/tmp/uav-test-fixture-fix-hr0h38a0/checks_final.log`、production_manifest.json、result.json；临时记录可能随清理失效。此次只修改测试配置/辅助函数、测试加载入口与文档，未启动相机、MAVROS、Mission 或修改飞控参数。无需因测试修正改变已验证的实机配置；此前清理阶段“125 项、24 处既有失败”为历史结果，已由本节的软件验证关闭。

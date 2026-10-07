@@ -1,0 +1,67 @@
+# T_SB: base_link origin/axes expressed in SOURCE body frame. Units m; Hamilton xyzw.
+# T_AW: source world -> canonical odom, both gravity-aligned Z-up.
+# Calibration/world alignment confirmed by the user on 2026-10-05.
+schema_version: 1
+source:
+  simulated: false
+  launches:
+  - package: ov_msckf
+    file: subscribe_realsense.launch
+    args:
+      config: realsense
+      start_camera: true
+      serial_no: ''
+  owned_nodes:
+  - /camera/realsense2_camera
+  - /camera/realsense2_camera_manager
+  - /ov_msckf
+input:
+  topic: /ov_msckf/odomimu
+  world_frame: global
+  body_frame: imu
+  linear_velocity_frame: body
+  angular_velocity_frame: body
+  orientation_covariance_frame: body
+extrinsic:
+  calibrated: true
+  translation_xyz:
+  - 0.0
+  - 0.0
+  - -0.1
+  rotation_xyzw:
+  # T_SB for optical IMU axes (right, down, forward) and a camera mounted
+  # forward-facing/upright: base_link axes are forward, left, up.
+  # Mount axis convention confirmed by the user.
+  - 0.5
+  - -0.5
+  - 0.5
+  - 0.5
+world_alignment:
+  verified: true
+  translation_xyz:
+  - 0.0
+  - 0.0
+  - 0.0
+  rotation_xyzw:
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+adapter:
+  stale_timeout: 0.3
+  max_position_step: 0.5
+  max_rotation_step_rad: 0.6
+  pose_variance_floor:
+  - 0.0001
+  - 0.0001
+  - 0.0001
+  - 0.0004
+  - 0.0004
+  - 0.0004
+  twist_variance_floor:
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001
+  - 0.001

@@ -1,77 +1,40 @@
-OpenVINS 输出 RealSense Odom 的 3D 位姿，Adapter 用一个固定外参把它转换成 Pixhawk IMU / PX4 控制所使用的位姿，再送给 PX4 EKF 融合。
+# UAV-ODOM-PX4 catkin 工作区
 
-```bash
-硬件链路：
-Ubuntu ──── Micro-USB ──── Pixhawk
-     | ———— USB C3.0 ————— Realsense
-     | ———— 数传 ————— Motion Capture
-```
-
-```bash
-数据链路：
-VIO/动捕：Odom 6DOF topic
-  ↓
-estimator_adapter：外参变换，发布数据
-  ↓
-MAVROS
-  ↓
-PX4 EKF2（EKF2_EV_CTRL = 3，XYZ融合）
-  ↓
-vehicle_local_position
-  ↓
-位置环
-  ↓
-悬停
-```
-
-## 编译
-
-```bash
-cd ~/uav_vio_px4
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install \
-  --base-paths src/open_vins src/estimator_adapter
-source install/setup.bash
-```
-
-## 实时启动
-
-先启动 RealSense 和 OpenVINS：
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/uav_vio_px4/install/setup.bash
-ros2 launch ov_msckf subscribe_realsense.launch.py
-```
-
-再启动 Adapter 和 MAVROS：
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/uav_vio_px4/install/setup.bash
-ros2 launch estimator_adapter estimator_adapter.launch.py
-```
-
-默认使用实时相机时间戳并向 `/mavros/odometry/out` 发布：
+本仓库是完整的 ROS1 Noetic 工作区。源码保存为真实目录，不使用仓库内发现链接。
 
 ```text
-output_enabled:=true
-replay_mode:=false
-start_mavros:=true
-fcu_url:=serial:///dev/serial/by-id/usb-3D_Robotics_PX4_FMU_v5.x_0-if00:57600
+uav_odom_px4/
+├── scripts/build.sh
+├── src/
+│   ├── uav_system/        # 自有 ROS 包：构建清单、业务代码、配置、launch、测试与文档
+│   │   └── third_party/px4_autopilot/  # 固件源码，不参与 catkin 构建
+│   └── open_vins/         # OpenVINS 独立 ROS 包及配置
+├── build/                # 本地产物，不上传
+└── devel/                # 本地产物，不上传
 ```
 
-仅启动 Adapter、不占用 PX4 串口：
+## 构建与检查
+
+使用已有 Noetic、catkin_tools 和依赖环境：
 
 ```bash
-ros2 launch estimator_adapter estimator_adapter.launch.py start_mavros:=false
+cd uav_odom_px4
+./scripts/build.sh
+source devel/setup.bash
+python3 -m pip install -r src/uav_system/requirements.txt
+bash src/uav_system/scripts/run_checks.sh
 ```
 
-临时关闭向 MAVROS/PX4 发布：
+脚本默认限制为 2 个编译任务、1 个并行包，额外参数转交 `catkin build`，例如 `./scripts/build.sh --no-status`。已加载正确 Noetic 环境时也可以在工作区根目录直接执行 `catkin build`。不要混用 Humble 环境。
 
-```bash
-ros2 launch estimator_adapter estimator_adapter.launch.py output_enabled:=false
-```
+依赖检查使用 `rosdep check --from-paths src --ignore-src`。Jetson/Jammy 的 Noetic、RealSense 和 OpenCV 需沿用本机环境，具体记录见 [本地验证](src/uav_system/docs/LOCAL_VALIDATION.md)。
 
-该启动文件不会修改 PX4 的 `EKF2_EV_CTRL`、解锁飞控或发送控制设定值。当前
-`config/extrinsics.yaml` 仍是未标定单位外参，只可用于地面数据链测试。
+旧布局的构建产物已备份在本机 `.legacy_catkin/`，不上传、不作为新版构建结果使用。
+
+## 项目文档
+
+- [业务包说明与启动入口](src/uav_system/README.md)
+- [架构与接口](src/uav_system/docs/ARCHITECTURE.md)
+- [验证记录](src/uav_system/docs/LOCAL_VALIDATION.md)
+
+先完成验证再执行任务。启动 Mission Executor 后，就绪时会自动请求模式与解锁；当前实机 VIO 和融合检查仍有未解决阻塞。

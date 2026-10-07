@@ -1,0 +1,48 @@
+<launch>
+  <arg name="state_source" default="openvins" />
+  <arg name="source_config" default="$(find uav_system)/config/state_sources/$(arg state_source).yaml" />
+  <arg name="start_mavros" default="$(eval arg('state_source') != 'mock')" />
+  <arg name="start_source" default="true" />
+  <arg name="start_ev_observer" default="$(eval arg('state_source') != 'mock')" />
+  <arg name="output_enabled" default="true" />
+  <arg name="simulation_transport" default="false" />
+  <arg name="fcu_url" default="/dev/ttyACM0:57600" />
+  <arg name="gcs_url" default="" />
+  <arg name="start_mission_executor" default="false" />
+  <arg name="mission_source" default="propellerless_motor_check" />
+  <arg name="mission_config" default="" />
+  <arg name="executor_config" default="" />
+  <arg name="auto_arm" default="" />
+  <arg name="arm_method" default="" />
+  <include if="$(eval arg('start_mavros') and arg('state_source') != 'mock')" file="$(find mavros)/launch/px4.launch">
+    <arg name="fcu_url" value="$(arg fcu_url)" />
+    <arg name="gcs_url" value="$(arg gcs_url)" />
+  </include>
+  <node pkg="uav_system" type="state_source_manager.py" name="state_source_manager" output="screen" required="true">
+    <param name="source_config" value="$(arg source_config)" />
+    <param name="start_source" value="$(arg start_source)" />
+  </node>
+  <node pkg="uav_system" type="state_adapter.py" name="state_adapter" output="screen" required="true">
+    <param name="source_config" value="$(arg source_config)" />
+  </node>
+  <node pkg="uav_system" type="px4_backend.py" name="control_backend" output="screen" required="true">
+    <rosparam command="load" file="$(find uav_system)/config/px4.yaml" />
+    <param name="output_enabled" type="bool" value="$(eval arg('output_enabled') and arg('state_source') != 'mock')" />
+    <param name="simulation_transport" type="bool" value="$(arg simulation_transport)" />
+  </node>
+  <node if="$(eval arg('start_ev_observer') and arg('state_source') != 'mock')" pkg="uav_system" type="px4_ev_observer.py" name="px4_ev_observer" output="screen" required="true">
+    <rosparam command="load" file="$(find uav_system)/config/flight_supervisor.yaml" />
+  </node>
+  <node pkg="uav_system" type="flight_supervisor_node.py" name="flight_supervisor" output="screen" required="true">
+    <rosparam command="load" file="$(find uav_system)/config/flight_supervisor.yaml" />
+    <param name="backend_output_enabled" value="$(eval arg('output_enabled') and arg('state_source') != 'mock')" />
+    <param name="simulation_transport" value="$(arg simulation_transport)" />
+  </node>
+  <include if="$(arg start_mission_executor)" file="$(find uav_system)/launch/mission_executor.launch">
+    <arg name="mission_source" value="$(arg mission_source)" />
+    <arg name="mission_config" value="$(arg mission_config)" />
+    <arg name="executor_config" value="$(arg executor_config)" />
+    <arg name="auto_arm" value="$(eval 'false' if arg('state_source') == 'mock' else arg('auto_arm'))" />
+    <arg name="arm_method" value="$(eval '' if arg('state_source') == 'mock' else arg('arm_method'))" />
+  </include>
+</launch>

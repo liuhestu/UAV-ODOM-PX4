@@ -29,7 +29,7 @@ def main():
     rospy.init_node('state_adapter')
     cfg = load_source(rospy.get_param('~source_config'))
     adapter = Adapter(cfg)
-    odom_pub = rospy.Publisher('/uav/state/odom', Odometry, queue_size=1)
+    odom_pub = rospy.Publisher('/uav/state/odom', Odometry, queue_size=32, tcp_nodelay=True)
     health_pub = rospy.Publisher('/uav/state/health', SourceStatus, queue_size=1)
     mutex = threading.RLock()
     state = dict(last_stamp=None, last_p=None, last_receive=None, source=None, source_at=None,
@@ -87,7 +87,11 @@ def main():
                     float(np.linalg.norm(np.asarray(xyzw(msg.pose.pose.orientation)))),
                     covariance_summary(msg.pose.covariance), covariance_summary(msg.twist.covariance))
     rospy.Subscriber('/uav/source/status', SourceStatus, source, queue_size=1)
-    rospy.Subscriber(cfg['input']['topic'], Odometry, raw, queue_size=1)
+    # TCPROS can deliver several high-rate samples in one socket read. A
+    # one-message queue prunes that batch before raw() sees it. Request
+    # immediate TCP delivery and retain a bounded 32-message burst (about 160 ms at 200 Hz);
+    # timestamp freshness and jump checks above still apply to every sample.
+    rospy.Subscriber(cfg["input"]["topic"], Odometry, raw, queue_size=32, tcp_nodelay=True)
     def tick():
         with mutex:
             msg = SourceStatus()

@@ -32,6 +32,7 @@ file(REMOVE "${CMAKE_CURRENT_BINARY_DIR}/catkin_generated/installspace/yaw_diagn
 
 # Independent domain modules, exported by one ROS package.
 catkin_install_python(PROGRAMS
+  ${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare_px4.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/state_source_manager/state_source_manager.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/state_adapter/state_adapter.py
   ${CMAKE_CURRENT_SOURCE_DIR}/src/flight_supervisor/flight_supervisor_node.py

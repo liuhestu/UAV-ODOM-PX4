@@ -277,6 +277,13 @@ int main(int argc, char **argv) {
   // Final visualization
   viz->visualize_final();
 
+  // Explicitly release ROS-facing objects before ros::shutdown().
+  // This avoids relying on global static destruction order when
+  // image_transport/pluginlib unloads its publisher plugins on exit.
+  viz.reset();
+  sys.reset();
+  ros::shutdown();
+
   // Done!
   return EXIT_SUCCESS;
 }

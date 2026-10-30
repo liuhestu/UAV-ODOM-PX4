@@ -73,6 +73,12 @@ source devel/setup.bash
 # 终端 1：只启动基础链，不启动 Mission Executor。
 roslaunch uav_system uav_system.launch state_source:=openvins fcu_url:=/dev/ttyACM0:57600
 
+# 更新终端 1 ： 启动包含 PX4 地面保护的基础链
+python3 src/uav_system/scripts/prepare_px4.py \
+  --ground-confirmed \
+  --start-base \
+  --log /tmp/px4_prepare.jsonl
+
 # 终端 2：默认无桨电机检查；先确认卸桨，内部自动等待。
 roslaunch uav_system mission_executor.launch
 ```
